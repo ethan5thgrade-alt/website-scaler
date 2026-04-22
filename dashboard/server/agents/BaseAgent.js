@@ -38,6 +38,13 @@ export class BaseAgent {
       'INSERT INTO agent_logs (agent_name, action, status, message) VALUES (?, ?, ?, ?)'
     ).run(this.name, message, status, message);
 
+    // Structured stdout log — picked up by log shippers (CloudWatch, Loki,
+    // Datadog) and trivial to grep locally.
+    const level = status === 'error' ? 'error' : status === 'warning' ? 'warn' : 'info';
+    console.log(JSON.stringify({
+      level, ts: new Date().toISOString(), agent: this.name, status, message,
+    }));
+
     this.broadcast('activity', {
       agent: this.name,
       action: message,

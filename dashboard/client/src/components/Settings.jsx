@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import SuppressionsPanel from './SuppressionsPanel.jsx';
 
 const SETTING_GROUPS = [
   {
@@ -168,6 +169,8 @@ export default function Settings() {
           </div>
         </div>
       ))}
+
+      <SuppressionsPanel />
 
       <div className="card border-dark-500">
         <div className="card-header mb-2">How It Works</div>
