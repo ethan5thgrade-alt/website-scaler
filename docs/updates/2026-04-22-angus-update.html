@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Website Scaler Update</title>
+<style>
+  @page { size: Letter; margin: 0.9in; }
+  body { font-family: Helvetica, Arial, sans-serif; font-size: 11pt; color: #222; line-height: 1.45; }
+  h1 { font-size: 16pt; margin: 0 0 4pt 0; color: #111; }
+  h2 { font-size: 12pt; margin: 18pt 0 6pt 0; color: #111; border-bottom: 1px solid #ccc; padding-bottom: 3pt; }
+  .meta { color: #555; font-size: 10pt; margin-bottom: 14pt; }
+  .meta div { margin: 1pt 0; }
+  ul { margin: 4pt 0 8pt 0; padding-left: 20pt; }
+  li { margin: 3pt 0; }
+  code { font-family: "Courier New", monospace; font-size: 10pt; background: #f2f2f2; padding: 1pt 3pt; border-radius: 2pt; }
+  p { margin: 6pt 0; }
+  .signoff { margin-top: 18pt; }
+</style>
+</head>
+<body>
+
+<h1>Website Scaler &mdash; Scout improvements + efficiency pass</h1>
+<div class="meta">
+  <div><strong>Branch:</strong> <code>claude/review-project-angus-Woph2</code></div>
+  <div><strong>To:</strong> Angus</div>
+  <div><strong>Date:</strong> April 22, 2026</div>
+</div>
+
+<p>Hi Angus,</p>
+
+<p>Two rounds of changes pushed to the <code>claude/review-project-angus-Woph2</code> branch. Quick summary:</p>
+
+<h2>Round 1 &mdash; Scout agent (commit b32b081)</h2>
+<ul>
+  <li>&ldquo;No website&rdquo; filter now ignores Facebook / Yelp / Linktree / business.site / OpenTable and similar social + aggregator URLs, so those listings still qualify as leads instead of being disqualified.</li>
+  <li>API results are category-verified against the requested category with synonyms (cafe &rarr; restaurant, barber &rarr; salon, yoga &rarr; gym), so text search can&rsquo;t slip in off-category listings.</li>
+  <li>Cross-run dedupe: Scout now skips <code>place_id</code>s already in the <code>businesses</code> table, so Scraper isn&rsquo;t re-enriching leads we&rsquo;ve already processed.</li>
+  <li>Success logs now include skip counts (has-website / off-category / dupe).</li>
+</ul>
+
+<h2>Round 2 &mdash; Efficiency pass (commit 077a5a9)</h2>
+<ul>
+  <li><strong>DB indexes</strong> on the hot query paths (businesses by zip/status, emails by status/sent_at, business_costs, token_usage, agent_logs, issues).</li>
+  <li><strong>Real token accounting:</strong> Builder returns Claude&rsquo;s <code>response.usage</code> + model; Accountant and Pricer now cost input / output / cache-read / cache-write separately per model instead of one flat $0.003/1K. The fake 150 / 200 / 500 / 2000 token constants in the pipeline are gone.</li>
+  <li><strong>Prompt caching hint</strong> added to Builder&rsquo;s system prompt (<code>cache_control: ephemeral</code>). It&rsquo;s a no-op until the system prompt crosses Haiku&rsquo;s 2048-token threshold &mdash; once we enrich it with style guidance or few-shots, caching activates with no further code changes.</li>
+  <li><strong>Bounded parallelism:</strong> the pipeline now runs three leads concurrently through a worker pool matching the Builder count, with per-lead error isolation. Daily-email-limit SQL is hoisted out of the inner loop.</li>
+</ul>
+
+<p>All five changed files pass <code>node --check</code>. End-to-end runtime verification still needs a mock-mode deploy &mdash; can you kick one off on your side?</p>
+
+<p>There&rsquo;s also a list of ~100 further improvements I drafted (Scout, Scraper, orchestration, Builder, Postman, Pricer, Sentinel, DB, infra, product) &mdash; happy to paste it into a follow-up or a doc if useful.</p>
+
+<p class="signoff">Thanks,<br>[your name]</p>
+
+</body>
+</html>
