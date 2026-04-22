@@ -1,5 +1,5 @@
 import { BaseAgent } from './BaseAgent.js';
-import { getSetting } from '../database.js';
+import { getDb, getSetting } from '../database.js';
 
 const MOCK_OWNERS = [
   { name: 'Rosa Martinez', email: 'rosa@mamabakery.com' },
@@ -131,23 +131,24 @@ export class Scraper extends BaseAgent {
         if (day && rest.length) hours[day.trim().toLowerCase()] = rest.join(':').trim();
       }
 
-      // Photos: resolve the first 3 to usable URLs. `skipHttpRedirect` returns
+      // Photos: resolve up to 3 in parallel. `skipHttpRedirect` returns
       // JSON with the final photo URL instead of a redirect.
-      const photos = [];
-      for (const ph of (p.photos || []).slice(0, 3)) {
-        try {
-          const pr = await fetch(
-            `https://places.googleapis.com/v1/${ph.name}/media?maxWidthPx=1200&skipHttpRedirect=true`,
-            { headers: { 'X-Goog-Api-Key': apiKey } },
-          );
-          if (pr.ok) {
+      const photoResults = await Promise.all(
+        (p.photos || []).slice(0, 3).map(async (ph) => {
+          try {
+            const pr = await fetch(
+              `https://places.googleapis.com/v1/${ph.name}/media?maxWidthPx=1200&skipHttpRedirect=true`,
+              { headers: { 'X-Goog-Api-Key': apiKey } },
+            );
+            if (!pr.ok) return null;
             const { photoUri } = await pr.json();
-            if (photoUri) photos.push(photoUri);
+            return photoUri || null;
+          } catch {
+            return null;
           }
-        } catch (_) {
-          // non-fatal — just skip this photo
-        }
-      }
+        }),
+      );
+      const photos = photoResults.filter(Boolean);
 
       const category = business.category || 'restaurant';
       const services = MOCK_SERVICES[category] || MOCK_SERVICES.restaurant;
@@ -188,7 +189,26 @@ export class Scraper extends BaseAgent {
       return enriched;
     } catch (err) {
       this.logIssue(`Scraper API call failed for ${business.name}: ${err.message}`, 'warning');
+      this.recordFailure(business, err.message);
       return null;
+    }
+  }
+
+  // Persist enrichment failures so we can see which upstream errors recur
+  // without flooding the issues table with one row per attempt.
+  recordFailure(business, reason) {
+    if (!business?.place_id) return;
+    try {
+      getDb().prepare(`
+        INSERT INTO enrichment_failures (place_id, business_name, reason)
+        VALUES (?, ?, ?)
+        ON CONFLICT(place_id) DO UPDATE SET
+          attempts = attempts + 1,
+          last_attempt_at = CURRENT_TIMESTAMP,
+          reason = excluded.reason
+      `).run(business.place_id, business.name || null, String(reason).slice(0, 500));
+    } catch (_) {
+      // non-fatal
     }
   }
 }

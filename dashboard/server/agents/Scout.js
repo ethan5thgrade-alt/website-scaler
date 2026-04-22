@@ -98,8 +98,12 @@ export class Scout extends BaseAgent {
       'places.nationalPhoneNumber',
       'places.location',
       'places.googleMapsUri',
+      'places.businessStatus',
       'nextPageToken',
     ].join(',');
+
+    const minReviews = parseInt(getSetting('min_review_count')) || 0;
+    const seenPhones = this.loadSeenPhones();
 
     const qualified = [];
     let pageToken;
@@ -107,6 +111,9 @@ export class Scout extends BaseAgent {
     let skippedHasWebsite = 0;
     let skippedCategory = 0;
     let skippedDupe = 0;
+    let skippedLowReviews = 0;
+    let skippedClosed = 0;
+    let skippedPhoneDupe = 0;
 
     try {
       do {
@@ -137,11 +144,19 @@ export class Scout extends BaseAgent {
         requestsMade++;
 
         for (const p of data.places || []) {
+          if (p.businessStatus && p.businessStatus !== 'OPERATIONAL') { skippedClosed++; continue; }
           if (this.hasRealWebsite(p.websiteUri)) { skippedHasWebsite++; continue; }
           if (seen.has(p.id)) { skippedDupe++; continue; }
 
           const inferred = this.inferCategory(p.types);
           if (!this.categoryMatches(category, inferred)) { skippedCategory++; continue; }
+
+          if (minReviews > 0 && (p.userRatingCount || 0) < minReviews) {
+            skippedLowReviews++; continue;
+          }
+
+          const phoneKey = this.normalizePhone(p.nationalPhoneNumber);
+          if (phoneKey && seenPhones.has(phoneKey)) { skippedPhoneDupe++; continue; }
 
           qualified.push({
             place_id: p.id,
@@ -156,6 +171,7 @@ export class Scout extends BaseAgent {
             maps_url: p.googleMapsUri,
           });
           seen.add(p.id);
+          if (phoneKey) seenPhones.add(phoneKey);
           if (qualified.length >= limit) break;
         }
 
@@ -165,7 +181,8 @@ export class Scout extends BaseAgent {
       this.log(
         `Found ${qualified.length} businesses without websites in ${zipCode} ` +
           `(${requestsMade} API calls; skipped ${skippedHasWebsite} with site, ` +
-          `${skippedCategory} off-category, ${skippedDupe} dupes)`,
+          `${skippedCategory} off-category, ${skippedDupe} dupes, ` +
+          `${skippedClosed} closed, ${skippedLowReviews} low-reviews, ${skippedPhoneDupe} phone-dupes)`,
         qualified.length > 0 ? 'success' : 'warning',
       );
       this.completeTask();
@@ -203,6 +220,24 @@ export class Scout extends BaseAgent {
     } catch {
       return new Set();
     }
+  }
+
+  // Phones already in our DB (normalized) — catches the same business
+  // registered twice under different place_ids.
+  loadSeenPhones() {
+    try {
+      const rows = getDb().prepare('SELECT phone FROM businesses WHERE phone IS NOT NULL').all();
+      return new Set(rows.map((r) => this.normalizePhone(r.phone)).filter(Boolean));
+    } catch {
+      return new Set();
+    }
+  }
+
+  normalizePhone(phone) {
+    if (!phone) return '';
+    const digits = String(phone).replace(/\D/g, '');
+    // Strip a leading country code if present (US-centric today).
+    return digits.length > 10 ? digits.slice(-10) : digits;
   }
 
   inferCategory(types = []) {

@@ -193,6 +193,38 @@ function initSchema() {
       FOREIGN KEY (site_id) REFERENCES sites(id)
     );
 
+    CREATE TABLE IF NOT EXISTS suppressions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL,
+      reason TEXT,
+      source TEXT,
+      tenant_id INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(email, tenant_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS enrichment_failures (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      place_id TEXT NOT NULL,
+      business_name TEXT,
+      reason TEXT,
+      attempts INTEGER DEFAULT 1,
+      last_attempt_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(place_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor TEXT,
+      action TEXT NOT NULL,
+      target_type TEXT,
+      target_id TEXT,
+      request_id TEXT,
+      metadata TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE INDEX IF NOT EXISTS idx_businesses_zip_status ON businesses(zip_code, status);
     CREATE INDEX IF NOT EXISTS idx_businesses_status ON businesses(status);
     CREATE INDEX IF NOT EXISTS idx_sites_business ON sites(business_id);
@@ -205,6 +237,10 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_scheduled_calls_time ON scheduled_calls(scheduled_at);
     CREATE INDEX IF NOT EXISTS idx_scheduled_calls_status ON scheduled_calls(status);
     CREATE INDEX IF NOT EXISTS idx_scheduled_calls_business ON scheduled_calls(business_id);
+    CREATE INDEX IF NOT EXISTS idx_suppressions_email ON suppressions(email);
+    CREATE INDEX IF NOT EXISTS idx_enrichment_failures_place ON enrichment_failures(place_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_target ON audit_log(target_type, target_id);
   `);
 
   // Phase-2 groundwork: add a nullable tenant_id to the big tables so we can
@@ -238,6 +274,9 @@ function initSchema() {
     price_sample_size: '0',
     calendly_link: '',
     calendly_webhook_secret: '',
+    sender_physical_address: '',
+    unsubscribe_base_url: '',
+    min_review_count: '5',
   };
   for (const [key, value] of Object.entries(defaults)) {
     insertSetting.run(key, value);

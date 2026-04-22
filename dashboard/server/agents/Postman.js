@@ -1,5 +1,6 @@
 import { BaseAgent } from './BaseAgent.js';
 import { getDb, getSetting } from '../database.js';
+import crypto from 'crypto';
 
 // Templates pitch a 15-min call. We build the demo *after* the call is booked
 // (via Calendly webhook). The `url` argument is the user's Calendly link.
@@ -32,6 +33,12 @@ export class Postman extends BaseAgent {
   async sendPitch(business, previewUrl) {
     this.heartbeat();
 
+    // Suppression check — never send to a previously-unsubscribed address.
+    if (business.owner_email && this.isSuppressed(business.owner_email)) {
+      this.log(`Skipping ${business.owner_email} — on suppression list`, 'info');
+      return { suppressed: true, to: business.owner_email };
+    }
+
     // Rate limiting
     const maxPerHour = parseInt(getSetting('max_emails_per_hour')) || 50;
     if (Date.now() - this.hourResetTime > 3600000) {
@@ -48,12 +55,18 @@ export class Postman extends BaseAgent {
     const calendlyLink = previewUrl || getSetting('calendly_link') || '';
     const template = EMAIL_TEMPLATES[Math.floor(Math.random() * EMAIL_TEMPLATES.length)];
     const subject = template.subject(business.name);
-    const body = template.body(business, calendlyLink);
+    const bodyCore = template.body(business, calendlyLink);
+
+    // CAN-SPAM footer: unsubscribe link + physical address are required.
+    const unsubUrl = this.buildUnsubscribeUrl(business.owner_email);
+    const physical = getSetting('sender_physical_address') || '';
+    const footerText = `\n\n---\nYou're receiving this because we found ${business.name} on Google Maps. If you'd rather not hear from us, unsubscribe here: ${unsubUrl}${physical ? `\n${physical}` : ''}`;
+    const body = bodyCore + footerText;
 
     const apiKey = getSetting('sendgrid_api_key');
 
     if (apiKey) {
-      await this.sendViaApi(business.owner_email, subject, body, apiKey);
+      await this.sendViaApi(business.owner_email, subject, body, apiKey, { unsubUrl });
     } else {
       // Mock mode
       await new Promise((r) => setTimeout(r, Math.random() * 500 + 200));
@@ -63,10 +76,33 @@ export class Postman extends BaseAgent {
     this.sentThisHour++;
     this.completeTask();
 
-    return { subject, body, to: business.owner_email };
+    return { subject, body, to: business.owner_email, unsubUrl };
   }
 
-  async sendViaApi(to, subject, body, apiKey) {
+  isSuppressed(email) {
+    try {
+      const row = getDb().prepare('SELECT id FROM suppressions WHERE email = ?').get(email.toLowerCase());
+      return !!row;
+    } catch {
+      return false;
+    }
+  }
+
+  // Signed unsubscribe token so the /unsubscribe endpoint can't be spoofed
+  // to suppress arbitrary addresses.
+  buildUnsubscribeUrl(email) {
+    const base = getSetting('unsubscribe_base_url') || 'http://localhost:3001';
+    const secret = getSetting('calendly_webhook_secret') || 'scaler-dev-secret';
+    const token = crypto
+      .createHmac('sha256', secret)
+      .update(String(email || '').toLowerCase())
+      .digest('hex')
+      .slice(0, 16);
+    const q = new URLSearchParams({ e: email || '', t: token });
+    return `${base.replace(/\/+$/, '')}/api/unsubscribe?${q.toString()}`;
+  }
+
+  async sendViaApi(to, subject, body, apiKey, { unsubUrl } = {}) {
     const fromEmail = getSetting('sendgrid_from_email');
     if (!fromEmail) {
       this.logIssue(
@@ -75,6 +111,19 @@ export class Postman extends BaseAgent {
         'Set SENDGRID_FROM_EMAIL in your .env and make sure the sending domain has SPF + DKIM configured in SendGrid.',
       );
       return;
+    }
+
+    // Plaintext + minimal HTML multipart. The HTML version preserves line
+    // breaks; recipients with HTML-only clients see a readable version.
+    const htmlBody = this.toHtml(body, unsubUrl);
+
+    // List-Unsubscribe + List-Unsubscribe-Post headers enable one-click
+    // unsubscribe in Gmail / Yahoo / Apple Mail (now required for bulk
+    // senders >5K/day to hit the inbox).
+    const headers = {};
+    if (unsubUrl) {
+      headers['List-Unsubscribe'] = `<${unsubUrl}>, <mailto:unsubscribe@${fromEmail.split('@')[1] || 'example.com'}>`;
+      headers['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click';
     }
 
     try {
@@ -88,7 +137,11 @@ export class Postman extends BaseAgent {
           personalizations: [{ to: [{ email: to }] }],
           from: { email: fromEmail, name: 'Website Scaler' },
           subject,
-          content: [{ type: 'text/plain', value: body }],
+          headers,
+          content: [
+            { type: 'text/plain', value: body },
+            { type: 'text/html', value: htmlBody },
+          ],
           tracking_settings: {
             click_tracking: { enable: true, enable_text: false },
             open_tracking: { enable: true },
@@ -110,5 +163,14 @@ export class Postman extends BaseAgent {
     } catch (err) {
       this.logIssue(`Email send failed for ${to}: ${err.message}`, 'error');
     }
+  }
+
+  // Minimal HTML renderer for the plaintext body. Escapes, then converts
+  // bare URLs and newlines. Keeps the email small — no heavy framework.
+  toHtml(body, unsubUrl) {
+    const escape = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const linkify = (s) => s.replace(/(https?:\/\/[^\s<]+)/g, (u) => `<a href="${u}">${u}</a>`);
+    const html = linkify(escape(body)).replace(/\n/g, '<br>');
+    return `<!DOCTYPE html><html><body style="font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:#222;max-width:640px;margin:0 auto;padding:16px;">${html}</body></html>`;
   }
 }

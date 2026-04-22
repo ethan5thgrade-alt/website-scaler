@@ -16,6 +16,15 @@ import { Accountant } from './agents/Accountant.js';
 import { Pricer } from './agents/Pricer.js';
 import { SentinelClient } from './agents/Sentinel.js';
 import { registerBuilders } from './services/builderDispatch.js';
+import {
+  requestId,
+  securityHeaders,
+  rateLimit,
+  corsOriginList,
+  notFound,
+  errorHandler,
+  accessLog,
+} from './services/http.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -24,8 +33,28 @@ const app = express();
 const server = createServer(app);
 
 // Middleware
-app.use(cors());
-app.use(express.json());
+app.set('trust proxy', 1);
+app.use(requestId());
+app.use(securityHeaders());
+app.use(cors({ origin: corsOriginList(), credentials: true }));
+app.use(express.json({ limit: '1mb' }));
+app.use(accessLog());
+
+// Health endpoints — cheap checks used by uptime monitors + load balancers.
+app.get('/healthz', (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+app.get('/readyz', (req, res) => {
+  try {
+    getDb().prepare('SELECT 1').get();
+    res.json({ ok: true, db: 'ok', ts: new Date().toISOString() });
+  } catch (err) {
+    res.status(503).json({ ok: false, db: err.message });
+  }
+});
+
+// Rate limits on the externally-triggered write endpoints.
+app.use('/api/deploy', rateLimit({ max: 3, windowMs: 60_000, name: 'deploy' }));
+app.use('/api/stop', rateLimit({ max: 10, windowMs: 60_000, name: 'stop' }));
+app.use('/api/calendly/webhook', rateLimit({ max: 60, windowMs: 60_000, name: 'calendly' }));
 
 // Serve generated sites
 app.use('/sites', express.static(path.join(__dirname, '..', 'generated-sites')));
@@ -266,12 +295,27 @@ async function runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit) {
   broadcast('pipeline_status', { status: 'completed' });
 }
 
-// SPA fallback
-app.get('*', (req, res) => {
+// SPA fallback — but let /api/* fall through to 404 + error handler below.
+app.get(/^(?!\/api\/).*/, (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'client', 'dist', 'index.html'));
 });
 
+// 404 + error envelope (last)
+app.use('/api', notFound());
+app.use(errorHandler());
+
+// Graceful shutdown — give in-flight requests a moment to finish.
+function shutdown(signal) {
+  console.log(JSON.stringify({ level: 'info', event: 'shutdown', signal }));
+  pipelineRunning = false;
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
 server.listen(PORT, () => {
-  console.log(`[Server] Website Scaler running on http://localhost:${PORT}`);
-  console.log(`[Server] WebSocket on same port`);
+  console.log(JSON.stringify({
+    level: 'info', event: 'server_started', port: PORT, ts: new Date().toISOString(),
+  }));
 });

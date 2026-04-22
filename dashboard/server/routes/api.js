@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { getDb } from '../database.js';
+import crypto from 'crypto';
+import { getDb, getSetting } from '../database.js';
 import { buildDemoForBusiness } from '../services/builderDispatch.js';
 
 const router = Router();
@@ -309,6 +310,119 @@ router.post('/calendly/webhook', async (req, res) => {
     });
 
   res.json({ ok: true, matched: true, callId, businessId: business.id });
+});
+
+// Unsubscribe endpoint — hit by the link in the email footer (GET) and by
+// Gmail/Yahoo one-click (POST). Token is a truncated HMAC over the email,
+// which prevents an attacker from suppressing arbitrary addresses.
+function verifyUnsubToken(email, token) {
+  const secret = getSetting('calendly_webhook_secret') || 'scaler-dev-secret';
+  const expected = crypto
+    .createHmac('sha256', secret)
+    .update(String(email || '').toLowerCase())
+    .digest('hex')
+    .slice(0, 16);
+  if (!token || token.length !== expected.length) return false;
+  // Timing-safe compare
+  return crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expected));
+}
+
+function recordUnsubscribe(email, req) {
+  const db = getDb();
+  db.prepare(
+    'INSERT OR IGNORE INTO suppressions (email, reason, source) VALUES (?, ?, ?)'
+  ).run(email.toLowerCase(), 'user_request', 'unsubscribe_link');
+  db.prepare('UPDATE emails SET unsubscribed = 1 WHERE to_email = ?').run(email);
+  db.prepare(
+    'INSERT INTO audit_log (actor, action, target_type, target_id, request_id, metadata) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run('prospect', 'unsubscribe', 'email', email.toLowerCase(), req?.id || null, JSON.stringify({ ua: req?.headers?.['user-agent'] || '' }));
+}
+
+router.get('/unsubscribe', (req, res) => {
+  const email = String(req.query.e || '').trim();
+  const token = String(req.query.t || '').trim();
+  if (!email || !verifyUnsubToken(email, token)) {
+    return res.status(400).send('<!doctype html><body style="font-family:sans-serif"><h2>Invalid unsubscribe link</h2></body>');
+  }
+  recordUnsubscribe(email, req);
+  res.send(
+    '<!doctype html><body style="font-family:sans-serif;max-width:420px;margin:40px auto;text-align:center">' +
+    '<h2>You\'re unsubscribed</h2>' +
+    `<p>We won\'t email <strong>${email.replace(/</g, '&lt;')}</strong> again.</p>` +
+    '</body>'
+  );
+});
+
+router.post('/unsubscribe', (req, res) => {
+  const email = String(req.query.e || req.body?.email || '').trim();
+  const token = String(req.query.t || req.body?.token || '').trim();
+  if (!email || !verifyUnsubToken(email, token)) {
+    return res.status(400).json({ ok: false, error: 'invalid_token' });
+  }
+  recordUnsubscribe(email, req);
+  res.json({ ok: true });
+});
+
+// SendGrid event webhook (bounces, spam reports, unsubscribes).
+// Array of events per docs: https://docs.sendgrid.com/for-developers/tracking-events/event
+router.post('/sendgrid/events', (req, res) => {
+  const events = Array.isArray(req.body) ? req.body : [];
+  const db = getDb();
+  const insertSuppress = db.prepare(
+    'INSERT OR IGNORE INTO suppressions (email, reason, source) VALUES (?, ?, ?)'
+  );
+  const markBounced = db.prepare('UPDATE emails SET bounced = 1 WHERE to_email = ?');
+  const markUnsub = db.prepare('UPDATE emails SET unsubscribed = 1 WHERE to_email = ?');
+  const markOpened = db.prepare('UPDATE emails SET opened_at = COALESCE(opened_at, CURRENT_TIMESTAMP) WHERE to_email = ? AND opened_at IS NULL');
+  const markClicked = db.prepare('UPDATE emails SET clicked_at = COALESCE(clicked_at, CURRENT_TIMESTAMP) WHERE to_email = ?');
+
+  for (const ev of events) {
+    const email = (ev.email || '').toLowerCase();
+    if (!email) continue;
+    switch (ev.event) {
+      case 'bounce':
+      case 'dropped':
+        insertSuppress.run(email, `sendgrid_${ev.event}`, 'sendgrid_webhook');
+        markBounced.run(email);
+        break;
+      case 'spamreport':
+        insertSuppress.run(email, 'spam_report', 'sendgrid_webhook');
+        break;
+      case 'unsubscribe':
+      case 'group_unsubscribe':
+        insertSuppress.run(email, 'unsubscribe', 'sendgrid_webhook');
+        markUnsub.run(email);
+        break;
+      case 'open':
+        markOpened.run(email);
+        break;
+      case 'click':
+        markClicked.run(email);
+        break;
+    }
+  }
+  res.json({ ok: true, processed: events.length });
+});
+
+// Suppression list management
+router.get('/suppressions', (req, res) => {
+  const db = getDb();
+  const rows = db.prepare('SELECT * FROM suppressions ORDER BY created_at DESC LIMIT 500').all();
+  res.json(rows);
+});
+
+router.post('/suppressions', (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!email) return res.status(400).json({ error: 'email required' });
+  getDb()
+    .prepare('INSERT OR IGNORE INTO suppressions (email, reason, source) VALUES (?, ?, ?)')
+    .run(email, req.body?.reason || 'manual', 'admin');
+  res.json({ ok: true });
+});
+
+router.delete('/suppressions/:email', (req, res) => {
+  getDb().prepare('DELETE FROM suppressions WHERE email = ?').run(String(req.params.email).toLowerCase());
+  res.json({ ok: true });
 });
 
 // Manual "build demo now" trigger for the Scheduled Calls tab.

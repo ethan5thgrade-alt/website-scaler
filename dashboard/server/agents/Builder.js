@@ -205,7 +205,14 @@ export class Builder extends BaseAgent {
   generateHtml(biz, design, about, tagline) {
     const services = Array.isArray(biz.services) ? biz.services : ['Quality Service'];
     const hours = biz.hours || {};
+    const reviews = Array.isArray(biz.reviews) ? biz.reviews.slice(0, 3) : [];
     const isDark = design.style === 'bold-electric';
+    const heroImg = Array.isArray(biz.photos) && biz.photos[0] ? biz.photos[0] : null;
+    const todayKey = new Date().toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+    const openStatus = this.computeOpenStatus(hours);
+    const jsonLd = this.buildJsonLd(biz, services, hours);
+    const metaDesc = this.escHtml(String(about).slice(0, 155));
+    const ogImage = heroImg ? this.escHtml(heroImg) : '';
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -213,6 +220,16 @@ export class Builder extends BaseAgent {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${this.escHtml(biz.name)}</title>
+  <meta name="description" content="${metaDesc}">
+  <meta name="theme-color" content="${design.primary}">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="${this.escHtml(biz.name)}">
+  <meta property="og:description" content="${metaDesc}">
+  ${ogImage ? `<meta property="og:image" content="${ogImage}">` : ''}
+  <meta name="twitter:card" content="${ogImage ? 'summary_large_image' : 'summary'}">
+  <meta name="twitter:title" content="${this.escHtml(biz.name)}">
+  <meta name="twitter:description" content="${metaDesc}">
+  <script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -273,6 +290,42 @@ export class Builder extends BaseAgent {
       border-bottom: 1px solid ${isDark ? '#333' : '#eee'};
     }
     .hours-table td:first-child { font-weight: 600; text-transform: capitalize; }
+    .hours-table tr.today td { background: ${design.primary}22; font-weight: 700; }
+    .status-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-top: 10px;
+    }
+    .status-open { background: #10b98122; color: #065f46; }
+    .status-closed { background: #ef444422; color: #991b1b; }
+    .reviews-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 15px;
+      margin-top: 20px;
+    }
+    .review-card {
+      background: ${isDark ? '#0F3460' : '#fff'};
+      border-radius: 10px;
+      padding: 18px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .review-card .stars { color: #f59e0b; margin-bottom: 6px; }
+    .review-card .author { font-size: 0.9rem; font-weight: 600; margin-top: 10px; }
+    .cta-row { margin-top: 20px; text-align: center; }
+    .cta-btn {
+      display: inline-block;
+      padding: 12px 26px;
+      border-radius: 8px;
+      background: #fff;
+      color: ${design.primary};
+      text-decoration: none;
+      font-weight: 700;
+      margin: 4px;
+    }
     .map-section { background: ${isDark ? '#0F3460' : '#f9fafb'}; }
     .map-container {
       border-radius: 10px;
@@ -309,6 +362,11 @@ export class Builder extends BaseAgent {
       <h1>${this.escHtml(biz.name)}</h1>
       <p>${this.escHtml(tagline)}</p>
       ${biz.rating ? `<div class="rating">${'&#9733;'.repeat(Math.round(biz.rating))} ${biz.rating}/5 (${biz.review_count || 0} reviews)</div>` : ''}
+      ${openStatus ? `<div class="status-badge ${openStatus.open ? 'status-open' : 'status-closed'}">${openStatus.open ? 'Open now' : 'Closed now'}</div>` : ''}
+      <div class="cta-row">
+        ${biz.phone ? `<a class="cta-btn" href="tel:${this.escHtml(biz.phone)}">Call ${this.escHtml(biz.phone)}</a>` : ''}
+        ${biz.maps_url ? `<a class="cta-btn" href="${this.escHtml(biz.maps_url)}" target="_blank" rel="noopener noreferrer">Get directions</a>` : ''}
+      </div>
     </div>
   </section>
 
@@ -333,8 +391,26 @@ export class Builder extends BaseAgent {
     <div class="container">
       <h2>Hours</h2>
       <table class="hours-table">
-        ${Object.entries(hours).map(([day, time]) => `<tr><td>${this.escHtml(day)}</td><td>${this.escHtml(time)}</td></tr>`).join('\n        ')}
+        ${Object.entries(hours).map(([day, time]) => {
+          const isToday = day.toLowerCase() === todayKey;
+          return `<tr${isToday ? ' class="today"' : ''}><td>${this.escHtml(day)}</td><td>${this.escHtml(time)}</td></tr>`;
+        }).join('\n        ')}
       </table>
+    </div>
+  </section>` : ''}
+
+  ${reviews.length > 0 ? `
+  <section>
+    <div class="container">
+      <h2>What Customers Say</h2>
+      <div class="reviews-grid">
+        ${reviews.map((r) => `
+          <div class="review-card">
+            <div class="stars">${'&#9733;'.repeat(Math.max(0, Math.min(5, Math.round(r.rating || 0))))}</div>
+            <p>${this.escHtml(String(r.text || '').slice(0, 240))}</p>
+            <div class="author">— ${this.escHtml(r.author || 'Customer')}</div>
+          </div>`).join('\n        ')}
+      </div>
     </div>
   </section>` : ''}
 
@@ -343,7 +419,7 @@ export class Builder extends BaseAgent {
       <h2>Find Us</h2>
       <p style="text-align:center;">${this.escHtml(biz.address || '')}</p>
       <div class="map-container">
-        <iframe src="https://maps.google.com/maps?q=${encodeURIComponent(biz.address || biz.name)}&output=embed" allowfullscreen loading="lazy"></iframe>
+        <iframe src="https://maps.google.com/maps?q=${encodeURIComponent(biz.address || biz.name)}&output=embed" allowfullscreen loading="lazy" title="Map showing ${this.escHtml(biz.name)} location"></iframe>
       </div>
     </div>
   </section>
@@ -370,5 +446,77 @@ export class Builder extends BaseAgent {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  // Parse hours like "9:00 AM – 6:00 PM" and decide if we're open right now.
+  // Returns { open: bool } or null if we can't tell.
+  computeOpenStatus(hours) {
+    if (!hours || typeof hours !== 'object') return null;
+    const dayKey = new Date().toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+    const todaySpec = hours[dayKey];
+    if (!todaySpec || /closed/i.test(todaySpec)) return { open: false };
+
+    const match = String(todaySpec).match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?\s*[–\-to]+\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
+    if (!match) return null;
+    const [, h1, m1 = '0', ap1, h2, m2 = '0', ap2] = match;
+    const to24 = (h, m, ap) => {
+      let n = parseInt(h, 10);
+      if (ap) {
+        const up = ap.toUpperCase();
+        if (up === 'PM' && n !== 12) n += 12;
+        if (up === 'AM' && n === 12) n = 0;
+      }
+      return n * 60 + parseInt(m, 10);
+    };
+    const now = new Date();
+    const cur = now.getHours() * 60 + now.getMinutes();
+    const open = to24(h1, m1, ap1 || ap2);
+    const close = to24(h2, m2, ap2 || ap1);
+    return { open: cur >= open && cur <= close };
+  }
+
+  // schema.org LocalBusiness JSON-LD. Helps Google + social unfurls.
+  buildJsonLd(biz, services, hours) {
+    const weekdayMap = {
+      monday: 'Mo', tuesday: 'Tu', wednesday: 'We', thursday: 'Th',
+      friday: 'Fr', saturday: 'Sa', sunday: 'Su',
+    };
+    const openingHours = Object.entries(hours || {})
+      .map(([day, spec]) => {
+        if (/closed/i.test(spec)) return null;
+        const m = String(spec).match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?\s*[–\-to]+\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
+        if (!m || !weekdayMap[day.toLowerCase()]) return null;
+        const fmt = (h, mn, ap) => {
+          let n = parseInt(h, 10);
+          if (ap) {
+            const up = ap.toUpperCase();
+            if (up === 'PM' && n !== 12) n += 12;
+            if (up === 'AM' && n === 12) n = 0;
+          }
+          return String(n).padStart(2, '0') + ':' + (mn || '00').padStart(2, '0');
+        };
+        return `${weekdayMap[day.toLowerCase()]} ${fmt(m[1], m[2], m[3] || m[6])}-${fmt(m[4], m[5], m[6] || m[3])}`;
+      })
+      .filter(Boolean);
+
+    return {
+      '@context': 'https://schema.org',
+      '@type': 'LocalBusiness',
+      name: biz.name,
+      address: biz.address || undefined,
+      telephone: biz.phone || undefined,
+      image: Array.isArray(biz.photos) && biz.photos.length ? biz.photos : undefined,
+      geo: biz.latitude && biz.longitude
+        ? { '@type': 'GeoCoordinates', latitude: biz.latitude, longitude: biz.longitude }
+        : undefined,
+      aggregateRating: biz.rating
+        ? { '@type': 'AggregateRating', ratingValue: biz.rating, reviewCount: biz.review_count || 0 }
+        : undefined,
+      priceRange: biz.price_range || undefined,
+      openingHours: openingHours.length ? openingHours : undefined,
+      hasOfferCatalog: services?.length
+        ? { '@type': 'OfferCatalog', name: 'Services', itemListElement: services.map((s) => ({ '@type': 'Offer', itemOffered: { '@type': 'Service', name: s } })) }
+        : undefined,
+    };
   }
 }
