@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { getDb } from '../database.js';
+import { buildDemoForBusiness } from '../services/builderDispatch.js';
 
 const router = Router();
 
@@ -290,7 +291,40 @@ router.post('/calendly/webhook', async (req, res) => {
     VALUES (?, ?, ?, ?, 'calendly', ?, 'scheduled')
   `).run(business.id, scheduledAt, bookerName, bookerEmail, providerEventId);
 
-  res.json({ ok: true, matched: true, callId: insert.lastInsertRowid, businessId: business.id });
+  const callId = insert.lastInsertRowid;
+
+  // Kick off the demo build asynchronously so the response returns fast.
+  // (Calendly retries on non-2xx, so we don't want to hold it open.)
+  buildDemoForBusiness(business.id, { reason: 'call_booked' })
+    .then(({ siteId }) => {
+      getDb()
+        .prepare('UPDATE scheduled_calls SET site_id = ?, status = ? WHERE id = ?')
+        .run(siteId, 'demo_built', callId);
+    })
+    .catch((err) => {
+      console.error('[Webhook] Demo build failed:', err.message);
+      getDb()
+        .prepare('UPDATE scheduled_calls SET status = ? WHERE id = ?')
+        .run('demo_failed', callId);
+    });
+
+  res.json({ ok: true, matched: true, callId, businessId: business.id });
+});
+
+// Manual "build demo now" trigger for the Scheduled Calls tab.
+router.post('/scheduled-calls/:id/build-demo', async (req, res) => {
+  const db = getDb();
+  const call = db.prepare('SELECT * FROM scheduled_calls WHERE id = ?').get(req.params.id);
+  if (!call) return res.status(404).json({ error: 'Call not found' });
+
+  try {
+    const { siteId, previewUrl } = await buildDemoForBusiness(call.business_id, { reason: 'manual' });
+    db.prepare('UPDATE scheduled_calls SET site_id = ?, status = ? WHERE id = ?')
+      .run(siteId, 'demo_built', call.id);
+    res.json({ ok: true, siteId, previewUrl });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 export default router;

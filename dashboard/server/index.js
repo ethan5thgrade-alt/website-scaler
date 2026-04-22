@@ -15,6 +15,7 @@ import { Postman } from './agents/Postman.js';
 import { Accountant } from './agents/Accountant.js';
 import { Pricer } from './agents/Pricer.js';
 import { SentinelClient } from './agents/Sentinel.js';
+import { registerBuilders } from './services/builderDispatch.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -58,6 +59,13 @@ function initAgents() {
   agents.accountant = new Accountant(broadcast);
   agents.pricer = new Pricer(broadcast);
   agents.sentinel = new SentinelClient(broadcast);
+
+  // Register builders so the Calendly webhook + manual "build demo" button
+  // can build outside the main pipeline.
+  registerBuilders(
+    [agents.builderAlpha, agents.builderBeta, agents.builderGamma],
+    { db: getDb(), broadcast, accountant: agents.accountant, pricer: agents.pricer },
+  );
 }
 
 initAgents();
