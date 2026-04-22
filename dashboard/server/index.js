@@ -13,6 +13,7 @@ import { Scraper } from './agents/Scraper.js';
 import { Builder } from './agents/Builder.js';
 import { Postman } from './agents/Postman.js';
 import { Accountant } from './agents/Accountant.js';
+import { Pricer } from './agents/Pricer.js';
 import { SentinelClient } from './agents/Sentinel.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -55,6 +56,7 @@ function initAgents() {
   agents.builderGamma = new Builder('Builder-Gamma', broadcast);
   agents.postman = new Postman(broadcast);
   agents.accountant = new Accountant(broadcast);
+  agents.pricer = new Pricer(broadcast);
   agents.sentinel = new SentinelClient(broadcast);
 }
 
@@ -191,9 +193,13 @@ async function runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit) {
           businessId = result.lastInsertRowid;
         }
 
-        // Track tokens
+        // Track tokens (global)
         agents.accountant.trackUsage('Scout', 150);
         agents.accountant.trackUsage('Scraper', 200);
+
+        // Track per-business costs for dynamic pricing
+        agents.pricer.trackBusinessCost(businessId, 'Scout', 150, 'default', 'find');
+        agents.pricer.trackBusinessCost(businessId, 'Scraper', 200, 'default', 'scrape');
 
         // Commander assigns to a builder (round-robin)
         const builder = builderAgents[builderIndex % 3];
@@ -209,6 +215,7 @@ async function runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit) {
         ).run(businessId, builder.name, siteResult.htmlPath, siteResult.previewUrl, siteResult.buildTime, siteResult.designStyle, 'completed');
 
         agents.accountant.trackUsage(builder.name, 2000);
+        agents.pricer.trackBusinessCost(businessId, builder.name, 2000, 'claude-sonnet-4-6', 'build');
 
         db.prepare('UPDATE businesses SET status = ? WHERE id = ?').run('site_built', businessId);
 
@@ -231,6 +238,11 @@ async function runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit) {
             ).run(businessId, siteRow.lastInsertRowid, enriched.owner_email, enriched.owner_name, emailResult.subject, emailResult.body, 'sent');
 
             agents.accountant.trackUsage('Postman', 500);
+            agents.pricer.trackBusinessCost(businessId, 'Postman', 500, 'default', 'email');
+
+            // Calculate dynamic price for this business
+            const pricing = agents.pricer.calculatePrice(businessId);
+            agents.pricer.log(`${enriched.name}: cost $${pricing.cost.toFixed(4)} → price $${pricing.finalPrice}`);
 
             if (currentPipelineId) {
               db.prepare('UPDATE pipeline_runs SET emails_sent = emails_sent + 1 WHERE id = ?').run(currentPipelineId);

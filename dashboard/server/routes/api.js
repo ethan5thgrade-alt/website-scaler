@@ -145,4 +145,88 @@ router.get('/businesses', (req, res) => {
   res.json(businesses);
 });
 
+// Pricing
+router.get('/pricing', (req, res) => {
+  const db = getDb();
+
+  const currentPrice = db.prepare("SELECT value FROM settings WHERE key = 'current_price'").get();
+  const avgCost = db.prepare("SELECT value FROM settings WHERE key = 'avg_cost_per_business'").get();
+  const sampleSize = db.prepare("SELECT value FROM settings WHERE key = 'price_sample_size'").get();
+
+  // Per-step breakdown
+  const byStep = db.prepare(`
+    SELECT step,
+      COUNT(*) as count,
+      AVG(total_cost) as avg_cost,
+      SUM(total_cost) as total_cost,
+      AVG(tokens_used) as avg_tokens
+    FROM business_costs
+    GROUP BY step
+    ORDER BY total_cost DESC
+  `).all();
+
+  // Most expensive businesses
+  const mostExpensive = db.prepare(`
+    SELECT bc.business_id, b.name, SUM(bc.total_cost) as total_cost, SUM(bc.tokens_used) as tokens
+    FROM business_costs bc
+    LEFT JOIN businesses b ON b.id = bc.business_id
+    GROUP BY bc.business_id
+    ORDER BY total_cost DESC
+    LIMIT 5
+  `).all();
+
+  // Total revenue vs total cost
+  const totalRevenue = db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM sales').get().total;
+  const totalCost = db.prepare('SELECT COALESCE(SUM(total_cost), 0) as total FROM business_costs').get().total;
+
+  // Recent price history from agent logs
+  const priceHistory = db.prepare(
+    "SELECT message, created_at FROM agent_logs WHERE agent_name = 'Pricer' AND status = 'success' ORDER BY created_at DESC LIMIT 10"
+  ).all();
+
+  res.json({
+    currentPrice: parseInt(currentPrice?.value) || 50,
+    avgCostPerBusiness: parseFloat(avgCost?.value) || 0,
+    sampleSize: parseInt(sampleSize?.value) || 0,
+    profitMargin: 5,
+    byStep,
+    mostExpensive,
+    totalRevenue,
+    totalCost,
+    netProfit: totalRevenue - totalCost,
+    priceHistory,
+  });
+});
+
+// Get price for specific business
+router.get('/pricing/:businessId', (req, res) => {
+  const db = getDb();
+  const businessId = parseInt(req.params.businessId);
+
+  const costs = db.prepare(`
+    SELECT step, agent_name, tokens_used, token_cost, api_cost, total_cost, model, created_at
+    FROM business_costs WHERE business_id = ? ORDER BY created_at
+  `).all(businessId);
+
+  const total = costs.reduce((sum, c) => sum + c.total_cost, 0);
+  const totalTokens = costs.reduce((sum, c) => sum + c.tokens_used, 0);
+
+  let price = Math.max(total + 150, total * 5);
+  price = Math.min(300, price);
+  price = Math.round(price / 5) * 5;
+  price = Math.max(150, price);
+
+  const business = db.prepare('SELECT name, category FROM businesses WHERE id = ?').get(businessId);
+
+  res.json({
+    businessId,
+    businessName: business?.name,
+    category: business?.category,
+    steps: costs,
+    totalCost: total,
+    totalTokens,
+    suggestedPrice: price,
+  });
+});
+
 export default router;
