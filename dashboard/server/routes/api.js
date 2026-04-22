@@ -229,4 +229,68 @@ router.get('/pricing/:businessId', (req, res) => {
   });
 });
 
+// Scheduled calls — populated by the Calendly webhook. Each row represents
+// a booked call where we need to build (or have already built) a demo site.
+router.get('/scheduled-calls', (req, res) => {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT sc.id, sc.scheduled_at, sc.booker_name, sc.booker_email, sc.status,
+           sc.business_id, sc.site_id,
+           b.name as business_name, b.category, b.address, b.phone,
+           b.rating, b.review_count,
+           s.preview_url, s.html_path
+    FROM scheduled_calls sc
+    LEFT JOIN businesses b ON b.id = sc.business_id
+    LEFT JOIN sites s ON s.id = sc.site_id
+    ORDER BY sc.scheduled_at ASC
+  `).all();
+  res.json(rows);
+});
+
+// Calendly webhook. Expects the `invitee.created` event payload. In the
+// user's Calendly booking form we ask for the business email or phone in
+// the "questions and answers" section; we use that to match to a lead.
+router.post('/calendly/webhook', async (req, res) => {
+  const db = getDb();
+  const event = req.body?.event;
+  const payload = req.body?.payload;
+
+  if (event !== 'invitee.created' || !payload) {
+    return res.json({ ok: true, ignored: true });
+  }
+
+  const bookerEmail = payload.email || payload.invitee?.email;
+  const bookerName = payload.name || payload.invitee?.name;
+  const scheduledAt = payload.scheduled_event?.start_time || payload.event?.start_time;
+  const providerEventId = payload.uri || payload.scheduled_event?.uri;
+
+  // Match by booker email first (most reliable — it's the owner_email we pitched).
+  let business = db.prepare('SELECT * FROM businesses WHERE owner_email = ?').get(bookerEmail);
+
+  // Fallback: look for a "business email" or "phone" answer in Calendly's Q&A.
+  if (!business && Array.isArray(payload.questions_and_answers)) {
+    const qa = payload.questions_and_answers;
+    const phoneAnswer = qa.find((q) => /phone/i.test(q.question))?.answer;
+    const emailAnswer = qa.find((q) => /email/i.test(q.question))?.answer;
+    if (emailAnswer) {
+      business = db.prepare('SELECT * FROM businesses WHERE owner_email = ?').get(emailAnswer);
+    }
+    if (!business && phoneAnswer) {
+      business = db.prepare('SELECT * FROM businesses WHERE phone = ?').get(phoneAnswer);
+    }
+  }
+
+  if (!business) {
+    // Stage the booking anyway — a human can reconcile it from the dashboard.
+    return res.status(202).json({ ok: true, matched: false });
+  }
+
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO scheduled_calls (business_id, scheduled_at, booker_name, booker_email, provider, provider_event_id, status)
+    VALUES (?, ?, ?, ?, 'calendly', ?, 'scheduled')
+  `).run(business.id, scheduledAt, bookerName, bookerEmail, providerEventId);
+
+  res.json({ ok: true, matched: true, callId: insert.lastInsertRowid, businessId: business.id });
+});
+
 export default router;

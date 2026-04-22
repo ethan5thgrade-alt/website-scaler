@@ -1,21 +1,23 @@
 import { BaseAgent } from './BaseAgent.js';
 import { getDb, getSetting } from '../database.js';
 
+// Templates pitch a 15-min call. We build the demo *after* the call is booked
+// (via Calendly webhook). The `url` argument is the user's Calendly link.
 const EMAIL_TEMPLATES = [
   {
-    subject: (name) => `I built a website for ${name} — take a look!`,
+    subject: (name) => `Quick idea for ${name} — 15 min?`,
     body: (biz, url) =>
-      `Hi ${biz.owner_name || 'there'},\n\nI came across ${biz.name} on Google and was really impressed — ${biz.rating} stars with ${biz.review_count} reviews is incredible!\n\nI noticed you don't have a website yet, so I went ahead and built one for you. Here's a preview:\n\n${url}\n\nIf you like it, it's yours for just $50 — no contracts, no subscriptions, you own it forever.\n\nJust reply to this email and I'll get it set up on your domain.\n\nBest,\nWebsite Scaler Team`,
+      `Hi ${biz.owner_name || 'there'},\n\nI came across ${biz.name} on Google — ${biz.rating} stars with ${biz.review_count} reviews is genuinely impressive.\n\nI noticed you don't have a website yet. I'd love to jump on a quick 15-minute call and show you a custom demo I can put together for your business. No pitch deck, no pressure — just a preview of what it could look like.\n\nBook a time here: ${url}\n\nIf the timing's off, reply and I'll work around your schedule.\n\nBest,\nWebsite Scaler Team`,
   },
   {
-    subject: (name) => `${name} deserves a great website — here's one I made for you`,
+    subject: (name) => `${name} deserves a great website — let's talk`,
     body: (biz, url) =>
-      `Hey ${biz.owner_name || 'there'},\n\nYour ${biz.review_count} Google reviews speak volumes about ${biz.name}. Your customers clearly love what you do!\n\nI put together a professional website for your business — completely free to preview:\n\n${url}\n\nIt's mobile-friendly, fast, and showcases your services beautifully. If you want it, just $50 and it's yours. No monthly fees, ever.\n\nWant it? Just hit reply.\n\nCheers,\nWebsite Scaler Team`,
+      `Hey ${biz.owner_name || 'there'},\n\nYour ${biz.review_count} Google reviews speak for themselves — clearly ${biz.name} is doing something right.\n\nI help small businesses get online without the monthly-fee nonsense. Got 15 minutes this week? I'll have a custom demo of a site for you, ready to look at together.\n\nGrab any time that works: ${url}\n\nCheers,\nWebsite Scaler Team`,
   },
   {
-    subject: (name) => `Quick question about ${name}`,
+    subject: (name) => `Free demo site for ${name}?`,
     body: (biz, url) =>
-      `Hi ${biz.owner_name || 'there'},\n\nI was looking up ${biz.category || 'businesses'} in your area and found ${biz.name}. Love the ${biz.rating}-star rating!\n\nI build websites for small businesses, and I actually made one for you already — here's the preview:\n\n${url}\n\nIf it looks good, you can claim it for $50. That's it — one payment, you own the site outright.\n\nNo pressure at all. Just thought you'd want to see it!\n\nBest regards,\nWebsite Scaler Team`,
+      `Hi ${biz.owner_name || 'there'},\n\nI build websites for local ${biz.category || 'businesses'}, and ${biz.name} caught my eye — ${biz.rating} stars doesn't happen by accident.\n\nI'd like to put together a free demo site for you and walk you through it on a 15-minute call. No slides, no hard sell — if you like it, we talk numbers. If not, no hard feelings.\n\nPick a slot: ${url}\n\nBest regards,\nWebsite Scaler Team`,
   },
 ];
 
@@ -41,10 +43,12 @@ export class Postman extends BaseAgent {
       await new Promise((r) => setTimeout(r, 5000));
     }
 
-    // Pick random template (in real implementation, use LLM)
+    // `previewUrl` is the Calendly link today. The demo site is built *after*
+    // the call is booked (via the Calendly webhook), not up front.
+    const calendlyLink = previewUrl || getSetting('calendly_link') || '';
     const template = EMAIL_TEMPLATES[Math.floor(Math.random() * EMAIL_TEMPLATES.length)];
     const subject = template.subject(business.name);
-    const body = template.body(business, previewUrl);
+    const body = template.body(business, calendlyLink);
 
     const apiKey = getSetting('sendgrid_api_key');
 

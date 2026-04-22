@@ -180,7 +180,7 @@ async function runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit) {
         JSON.stringify(enriched.hours), JSON.stringify(enriched.photos),
         JSON.stringify(enriched.services), enriched.owner_name, enriched.owner_email,
         biz.zip_code || enriched.address?.match(/\b\d{5}\b/)?.[0] || null,
-        JSON.stringify(enriched), 'scraped',
+        JSON.stringify(enriched), 'pitched',
         enriched.rating ? Math.round(enriched.rating * (enriched.review_count || 0)) : 0
       );
       businessId = result.lastInsertRowid;
@@ -190,41 +190,19 @@ async function runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit) {
     agents.pricer.trackBusinessCost(businessId, 'Scout', 0, 'default', 'find');
     agents.pricer.trackBusinessCost(businessId, 'Scraper', 0, 'default', 'scrape');
 
-    // Round-robin across builder pool
-    const builder = builderAgents[builderIndex++ % builderAgents.length];
-    agents.commander.log(`Assigning ${enriched.name} to ${builder.name}`);
+    // Builder no longer runs here — the pitch is for a call. Builder runs
+    // after the prospect books via Calendly (see /api/calendly/webhook).
 
-    const siteResult = await builder.buildSite(enriched);
-
-    const siteRow = db.prepare(
-      'INSERT INTO sites (business_id, builder_agent, html_path, preview_url, build_time_ms, design_style, status) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run(businessId, builder.name, siteResult.htmlPath, siteResult.previewUrl, siteResult.buildTime, siteResult.designStyle, 'completed');
-
-    // Real token usage from Claude's response.usage when available.
-    if (siteResult.usage) {
-      agents.accountant.trackUsage(builder.name, siteResult.usage, siteResult.model);
-      agents.pricer.trackBusinessCost(businessId, builder.name, siteResult.usage, siteResult.model, 'build');
-    }
-
-    db.prepare('UPDATE businesses SET status = ? WHERE id = ?').run('site_built', businessId);
-    if (currentPipelineId) {
-      db.prepare('UPDATE pipeline_runs SET sites_built = sites_built + 1 WHERE id = ?').run(currentPipelineId);
-    }
-
-    // Email — template-based, no LLM tokens. Check counter in memory to avoid
-    // a SQL round-trip per lead; DB stays authoritative for restarts.
+    // Email — pitch the call with the Calendly link.
+    const calendlyLink = (process.env.CALENDLY_LINK || getSettingLink()) || '';
     if (enriched.owner_email && emailsSentToday < dailyEmailLimit) {
       emailsSentToday++;
-      const emailResult = await agents.postman.sendPitch(enriched, siteResult.previewUrl);
+      const emailResult = await agents.postman.sendPitch(enriched, calendlyLink);
       db.prepare(
         'INSERT INTO emails (business_id, site_id, to_email, to_name, subject, body, status, sent_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)'
-      ).run(businessId, siteRow.lastInsertRowid, enriched.owner_email, enriched.owner_name, emailResult.subject, emailResult.body, 'sent');
+      ).run(businessId, null, enriched.owner_email, enriched.owner_name, emailResult.subject, emailResult.body, 'sent');
 
-      // Postman uses templates today — only the SendGrid fixed cost applies.
       agents.pricer.trackBusinessCost(businessId, 'Postman', 0, 'default', 'email');
-
-      const pricing = agents.pricer.calculatePrice(businessId);
-      agents.pricer.log(`${enriched.name}: cost $${pricing.cost.toFixed(4)} → price $${pricing.finalPrice}`);
 
       if (currentPipelineId) {
         db.prepare('UPDATE pipeline_runs SET emails_sent = emails_sent + 1 WHERE id = ?').run(currentPipelineId);
@@ -235,6 +213,11 @@ async function runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit) {
     if (currentPipelineId) {
       db.prepare('UPDATE pipeline_runs SET businesses_found = ? WHERE id = ?').run(totalProcessed, currentPipelineId);
     }
+  }
+
+  function getSettingLink() {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'calendly_link'").get();
+    return row?.value || '';
   }
 
   // Run up to `concurrency` leads at a time per Scout call. Errors are

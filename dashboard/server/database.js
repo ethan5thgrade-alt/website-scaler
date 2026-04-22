@@ -177,6 +177,22 @@ function initSchema() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS scheduled_calls (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      business_id INTEGER NOT NULL,
+      site_id INTEGER,
+      scheduled_at DATETIME NOT NULL,
+      booker_name TEXT,
+      booker_email TEXT,
+      provider TEXT DEFAULT 'calendly',
+      provider_event_id TEXT UNIQUE,
+      status TEXT DEFAULT 'scheduled',
+      tenant_id INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (business_id) REFERENCES businesses(id),
+      FOREIGN KEY (site_id) REFERENCES sites(id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_businesses_zip_status ON businesses(zip_code, status);
     CREATE INDEX IF NOT EXISTS idx_businesses_status ON businesses(status);
     CREATE INDEX IF NOT EXISTS idx_sites_business ON sites(business_id);
@@ -186,7 +202,20 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_token_usage_created ON token_usage(created_at);
     CREATE INDEX IF NOT EXISTS idx_agent_logs_created ON agent_logs(created_at);
     CREATE INDEX IF NOT EXISTS idx_issues_resolved ON issues(resolved, created_at);
+    CREATE INDEX IF NOT EXISTS idx_scheduled_calls_time ON scheduled_calls(scheduled_at);
+    CREATE INDEX IF NOT EXISTS idx_scheduled_calls_status ON scheduled_calls(status);
+    CREATE INDEX IF NOT EXISTS idx_scheduled_calls_business ON scheduled_calls(business_id);
   `);
+
+  // Phase-2 groundwork: add a nullable tenant_id to the big tables so we can
+  // multi-tenant later without a painful migration. Default 1 for today's
+  // single-tenant use. Uses ALTER TABLE ADD COLUMN + IF NOT EXISTS guard.
+  for (const tbl of ['businesses', 'sites', 'emails', 'sales', 'scheduled_calls']) {
+    const cols = db.prepare(`PRAGMA table_info(${tbl})`).all();
+    if (!cols.some((c) => c.name === 'tenant_id')) {
+      db.exec(`ALTER TABLE ${tbl} ADD COLUMN tenant_id INTEGER DEFAULT 1`);
+    }
+  }
 
   // Insert default settings if not present
   const insertSetting = db.prepare(
@@ -207,6 +236,8 @@ function initSchema() {
     current_price: '50',
     avg_cost_per_business: '0',
     price_sample_size: '0',
+    calendly_link: '',
+    calendly_webhook_secret: '',
   };
   for (const [key, value] of Object.entries(defaults)) {
     insertSetting.run(key, value);
