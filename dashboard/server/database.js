@@ -176,6 +176,16 @@ function initSchema() {
       finished_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE INDEX IF NOT EXISTS idx_businesses_zip_status ON businesses(zip_code, status);
+    CREATE INDEX IF NOT EXISTS idx_businesses_status ON businesses(status);
+    CREATE INDEX IF NOT EXISTS idx_sites_business ON sites(business_id);
+    CREATE INDEX IF NOT EXISTS idx_emails_status_sent ON emails(status, sent_at);
+    CREATE INDEX IF NOT EXISTS idx_emails_business ON emails(business_id);
+    CREATE INDEX IF NOT EXISTS idx_business_costs_business ON business_costs(business_id);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_created ON token_usage(created_at);
+    CREATE INDEX IF NOT EXISTS idx_agent_logs_created ON agent_logs(created_at);
+    CREATE INDEX IF NOT EXISTS idx_issues_resolved ON issues(resolved, created_at);
   `);
 
   // Insert default settings if not present

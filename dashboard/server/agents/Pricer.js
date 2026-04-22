@@ -1,13 +1,31 @@
 import { BaseAgent } from './BaseAgent.js';
 import { getDb, getSetting, setSetting } from '../database.js';
 
-// Cost per 1K tokens by model (must match Accountant)
+// Cost per 1K tokens by model (mirrors Accountant).
 const COST_PER_1K = {
-  'claude-sonnet-4-6': 0.003,
-  'gpt-4o': 0.005,
-  'gpt-4o-mini': 0.00015,
-  default: 0.003,
+  'claude-sonnet-4-6': { input: 0.003, output: 0.015, cacheWrite: 0.00375, cacheRead: 0.0003 },
+  'claude-haiku-4-5':  { input: 0.001, output: 0.005, cacheWrite: 0.00125, cacheRead: 0.0001 },
+  'gpt-4o':            { input: 0.005, output: 0.015, cacheWrite: 0.005,   cacheRead: 0.0025 },
+  'gpt-4o-mini':       { input: 0.00015, output: 0.0006, cacheWrite: 0.00015, cacheRead: 0.000075 },
+  default:             { input: 0.003, output: 0.015, cacheWrite: 0.00375, cacheRead: 0.0003 },
 };
+
+function costTokens(usage, model) {
+  const p = COST_PER_1K[model] || COST_PER_1K.default;
+  if (typeof usage === 'number') return { tokens: usage, cost: (usage / 1000) * p.output };
+  const input = usage.input_tokens || 0;
+  const output = usage.output_tokens || 0;
+  const cacheWrite = usage.cache_creation_input_tokens || 0;
+  const cacheRead = usage.cache_read_input_tokens || 0;
+  return {
+    tokens: input + output + cacheWrite + cacheRead,
+    cost:
+      (input / 1000) * p.input +
+      (output / 1000) * p.output +
+      (cacheWrite / 1000) * p.cacheWrite +
+      (cacheRead / 1000) * p.cacheRead,
+  };
+}
 
 // Fixed costs per business (API calls, not tokens)
 const FIXED_COSTS = {
@@ -42,10 +60,9 @@ export class Pricer extends BaseAgent {
    * Track cost for a specific business.
    * Called during pipeline for each step.
    */
-  trackBusinessCost(businessId, agent, tokens, model = 'default', step = 'unknown') {
-    const db = getDb();
-    const costPer1K = COST_PER_1K[model] || COST_PER_1K.default;
-    const tokenCost = (tokens / 1000) * costPer1K;
+  // `usage` is a scalar (legacy) or a Claude `response.usage` object.
+  trackBusinessCost(businessId, agent, usage, model = 'default', step = 'unknown') {
+    const { tokens, cost: tokenCost } = costTokens(usage || 0, model);
 
     // Add fixed API costs for certain steps
     let apiCost = 0;
@@ -55,6 +72,7 @@ export class Pricer extends BaseAgent {
 
     const totalCost = tokenCost + apiCost;
 
+    const db = getDb();
     db.prepare(`
       INSERT INTO business_costs (business_id, agent_name, step, tokens_used, token_cost, api_cost, total_cost, model)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)

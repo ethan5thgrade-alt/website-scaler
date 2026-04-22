@@ -1,13 +1,35 @@
 import { BaseAgent } from './BaseAgent.js';
 import { getDb, getSetting } from '../database.js';
 
-// Approximate cost per 1K tokens by model
+// Approximate cost per 1K tokens by model.
+// `input`/`output` for standard tokens; `cacheWrite`/`cacheRead` for prompt-cache.
 const COST_PER_1K = {
-  'claude-sonnet-4-6': 0.003,
-  'gpt-4o': 0.005,
-  'gpt-4o-mini': 0.00015,
-  default: 0.003,
+  'claude-sonnet-4-6': { input: 0.003, output: 0.015, cacheWrite: 0.00375, cacheRead: 0.0003 },
+  'claude-haiku-4-5':  { input: 0.001, output: 0.005, cacheWrite: 0.00125, cacheRead: 0.0001 },
+  'gpt-4o':            { input: 0.005, output: 0.015, cacheWrite: 0.005,   cacheRead: 0.0025 },
+  'gpt-4o-mini':       { input: 0.00015, output: 0.0006, cacheWrite: 0.00015, cacheRead: 0.000075 },
+  default:             { input: 0.003, output: 0.015, cacheWrite: 0.00375, cacheRead: 0.0003 },
 };
+
+// Cost a token-usage record. `usage` is either a scalar (legacy approximate
+// count) or a Claude `response.usage` object with input/output/cache fields.
+function costTokens(usage, model) {
+  const p = COST_PER_1K[model] || COST_PER_1K.default;
+  if (typeof usage === 'number') {
+    // Legacy path: treat as output-equivalent tokens.
+    return { tokens: usage, cost: (usage / 1000) * p.output };
+  }
+  const input = usage.input_tokens || 0;
+  const output = usage.output_tokens || 0;
+  const cacheWrite = usage.cache_creation_input_tokens || 0;
+  const cacheRead = usage.cache_read_input_tokens || 0;
+  const cost =
+    (input / 1000) * p.input +
+    (output / 1000) * p.output +
+    (cacheWrite / 1000) * p.cacheWrite +
+    (cacheRead / 1000) * p.cacheRead;
+  return { tokens: input + output + cacheWrite + cacheRead, cost };
+}
 
 export class Accountant extends BaseAgent {
   constructor(broadcast) {
@@ -26,11 +48,15 @@ export class Accountant extends BaseAgent {
     await super.stop();
   }
 
-  trackUsage(agentName, tokens, model = 'default') {
-    const db = getDb();
-    const costPer1K = COST_PER_1K[model] || COST_PER_1K.default;
-    const cost = (tokens / 1000) * costPer1K;
+  // `usage` can be a scalar token count (legacy) or a Claude `response.usage`
+  // object. Skip zero-token records so Scout/Scraper/Postman don't spam the
+  // log when they don't call an LLM.
+  trackUsage(agentName, usage, model = 'default') {
+    if (!usage || (typeof usage === 'number' && usage === 0)) return;
+    const { tokens, cost } = costTokens(usage, model);
+    if (tokens === 0) return;
 
+    const db = getDb();
     db.prepare(
       'INSERT INTO token_usage (agent_name, tokens_used, cost_estimate, model) VALUES (?, ?, ?, ?)'
     ).run(agentName, tokens, cost, model);
@@ -39,6 +65,7 @@ export class Accountant extends BaseAgent {
       agent: agentName,
       tokens,
       cost,
+      model,
       timestamp: new Date().toISOString(),
     });
 

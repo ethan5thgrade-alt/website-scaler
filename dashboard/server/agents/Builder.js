@@ -84,9 +84,11 @@ export class Builder extends BaseAgent {
     const anthropicKey = getSetting('anthropic_api_key');
     let about;
     let tagline;
+    let usage = null;
+    let model = null;
     if (anthropicKey) {
       try {
-        ({ about, tagline } = await this.generateCopyWithClaude(business, anthropicKey));
+        ({ about, tagline, usage, model } = await this.generateCopyWithClaude(business, anthropicKey));
       } catch (err) {
         this.log(`Claude copy failed (${err.message}) — falling back to templates`, 'warning');
         about = this.generateAbout(business);
@@ -119,11 +121,15 @@ export class Builder extends BaseAgent {
       previewUrl,
       buildTime,
       designStyle: design.style,
+      usage,
+      model,
     };
   }
 
   // Real Claude copy generation. Haiku for minimum token cost (~$0.001 per site).
-  // Returns { about, tagline } — structured JSON so we never have to parse prose.
+  // Returns { about, tagline, usage, model }. `cache_control` on the system
+  // block activates prompt caching once the system prompt crosses Haiku's
+  // 2048-token threshold — a no-op until then, and free to leave enabled.
   async generateCopyWithClaude(biz, apiKey) {
     const client = new Anthropic({ apiKey });
     const reviews = Array.isArray(biz.reviews)
@@ -143,14 +149,21 @@ export class Builder extends BaseAgent {
       .filter(Boolean)
       .join('\n');
 
+    const model = 'claude-haiku-4-5';
     const response = await client.messages.create({
-      model: 'claude-haiku-4-5',
+      model,
       max_tokens: 400,
-      system:
-        'You write short, grounded website copy for small local businesses. ' +
-        'No jargon, no marketing clichés ("dedicated to", "nestled", "where quality meets"). ' +
-        'Base every line on the business data provided; never invent credentials or services. ' +
-        'Return ONLY valid JSON matching: {"tagline": "5-9 word phrase", "about": "50-90 word paragraph (2-3 sentences)"}',
+      system: [
+        {
+          type: 'text',
+          text:
+            'You write short, grounded website copy for small local businesses. ' +
+            'No jargon, no marketing clichés ("dedicated to", "nestled", "where quality meets"). ' +
+            'Base every line on the business data provided; never invent credentials or services. ' +
+            'Return ONLY valid JSON matching: {"tagline": "5-9 word phrase", "about": "50-90 word paragraph (2-3 sentences)"}',
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
       messages: [{ role: 'user', content: userInput }],
     });
 
@@ -162,7 +175,7 @@ export class Builder extends BaseAgent {
     if (!parsed.about || !parsed.tagline) {
       throw new Error('Claude returned incomplete copy JSON');
     }
-    return { about: parsed.about, tagline: parsed.tagline };
+    return { about: parsed.about, tagline: parsed.tagline, usage: response.usage, model };
   }
 
   generateAbout(biz) {
