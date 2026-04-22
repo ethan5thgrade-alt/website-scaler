@@ -194,6 +194,7 @@ function initSchema() {
     daily_email_limit: '200',
     max_emails_per_hour: '50',
     site_base_url: 'http://localhost:3001/sites',
+    daily_budget_usd: '5',
     current_price: '50',
     avg_cost_per_business: '0',
     price_sample_size: '0',

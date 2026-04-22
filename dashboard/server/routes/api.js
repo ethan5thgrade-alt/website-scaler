@@ -145,6 +145,28 @@ router.get('/businesses', (req, res) => {
   res.json(businesses);
 });
 
+// Generated sites — for the SiteGallery view.
+router.get('/sites', (req, res) => {
+  const db = getDb();
+  const limit = parseInt(req.query.limit) || 100;
+  const rows = db
+    .prepare(
+      `SELECT s.id, s.preview_url, s.build_time_ms, s.design_style, s.builder_agent,
+              s.created_at AS built_at,
+              b.name AS business_name, b.category, b.rating, b.review_count,
+              b.address, b.place_id,
+              e.status AS email_status, e.opened_at, e.clicked_at
+         FROM sites s
+         LEFT JOIN businesses b ON s.business_id = b.id
+         LEFT JOIN emails e ON e.site_id = s.id
+        WHERE s.status = 'completed'
+        ORDER BY s.created_at DESC
+        LIMIT ?`,
+    )
+    .all(limit);
+  res.json(rows);
+});
+
 // Pricing
 router.get('/pricing', (req, res) => {
   const db = getDb();

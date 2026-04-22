@@ -1,5 +1,6 @@
 import { BaseAgent } from './BaseAgent.js';
 import { getSetting } from '../database.js';
+import { logGoogleMapsUsage } from '../services/cost-tracker.js';
 
 const MOCK_OWNERS = [
   { name: 'Rosa Martinez', email: 'rosa@mamabakery.com' },
@@ -123,6 +124,7 @@ export class Scraper extends BaseAgent {
         return null;
       }
       const p = await res.json();
+      logGoogleMapsUsage({ agent: this.name, sku: 'place_details' });
 
       // Convert weekdayDescriptions → { monday: "9am-5pm", ... }
       const hours = {};
@@ -142,7 +144,10 @@ export class Scraper extends BaseAgent {
           );
           if (pr.ok) {
             const { photoUri } = await pr.json();
-            if (photoUri) photos.push(photoUri);
+            if (photoUri) {
+              photos.push(photoUri);
+              logGoogleMapsUsage({ agent: this.name, sku: 'place_photo' });
+            }
           }
         } catch (_) {
           // non-fatal — just skip this photo

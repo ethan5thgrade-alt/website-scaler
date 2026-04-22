@@ -16,9 +16,46 @@ const FIXED_COSTS = {
   email_send: 0.001,             // SendGrid/Resend per email
 };
 
-const MIN_PRICE = 150;   // guaranteed $150 minimum profit per site
-const MAX_PRICE = 300;   // cap — we're targeting volume, not whales
-const PROFIT_MARGIN = 5; // 5x markup on cost as baseline
+const MIN_PRICE = 100;
+const MAX_PRICE = 1500;
+const PROFIT_MARGIN = 5;
+
+// Quote buckets. We never charge a flat $50 — price reflects the kind of business.
+const TIERS = [100, 150, 250, 400, 700, 1000, 1500];
+
+// Base tier index per category. Higher = more lucrative business → higher quote.
+const CATEGORY_BASE = {
+  lawyer: 4, law_office: 4,
+  dentist: 4, dental_office: 4, medical_office: 4, doctor: 4,
+  gym: 3, spa: 3, auto_repair: 3, plumber: 3, electrician: 3,
+  restaurant: 2, cafe: 2, bakery: 2, salon: 2, hair_salon: 2,
+  nail_salon: 2, barbershop: 2, boutique: 2, dry_cleaner: 2,
+  florist: 1, tutoring: 1, pet_service: 1, pet_grooming: 1,
+  default: 1,
+};
+
+function pickTier(business) {
+  const cat = (business?.category || 'default').toLowerCase();
+  let idx = CATEGORY_BASE[cat] ?? CATEGORY_BASE.default;
+
+  // Rating signal
+  const rating = Number(business?.rating) || 0;
+  if (rating >= 4.7) idx += 1;
+  else if (rating > 0 && rating < 4.0) idx -= 1;
+
+  // Review volume signal (busy business = more revenue = bigger budget)
+  const reviews = Number(business?.review_count) || 0;
+  if (reviews >= 200) idx += 1;
+  else if (reviews > 0 && reviews < 50) idx -= 1;
+
+  // Random jitter — two buyers in the same niche should still see different quotes
+  const jitter = Math.floor(Math.random() * 3) - 1; // -1, 0, +1
+  idx += jitter;
+
+  // Clamp
+  idx = Math.max(0, Math.min(TIERS.length - 1, idx));
+  return TIERS[idx];
+}
 
 export class Pricer extends BaseAgent {
   constructor(broadcast) {
@@ -85,38 +122,22 @@ export class Pricer extends BaseAgent {
   }
 
   /**
-   * Calculate the price to charge for a business's website.
-   *
-   * Strategy: volume play — send tons of emails, charge small/medium amount.
-   * GUARANTEE: at least $150 PROFIT per site (price = cost + $150 minimum).
-   * For expensive builds (cost > $30), flag for manual review.
+   * Quote a price for a business. Varies wildly — $100 for a small florist,
+   * $1000+ for a law firm with 300 reviews. Driven by category + rating +
+   * review volume + jitter. Cost is tracked for margin but does NOT cap the
+   * upside: a cheap build for a lawyer still quotes like a lawyer.
    */
-  calculatePrice(businessId) {
+  calculatePrice(businessId, business = null) {
     const cost = this.getBusinessCost(businessId);
+    const biz = business || getDb().prepare('SELECT name, category, rating, review_count FROM businesses WHERE id = ?').get(businessId);
 
-    // Guarantee $150 profit: price = cost + $150, or 5x markup, whichever is higher
-    let price = Math.max(cost.totalCost + MIN_PRICE, cost.totalCost * PROFIT_MARGIN);
+    let price = pickTier(biz);
 
-    // Flag expensive builds for manual review instead of auto-pricing
-    if (cost.totalCost > 30) {
-      this.log(`⚠️ Expensive build (biz #${businessId}): cost $${cost.totalCost.toFixed(2)} — needs manual review before pricing`, 'warning');
-      this.logIssue(
-        `Business #${businessId} cost $${cost.totalCost.toFixed(2)} to build — too expensive for auto-pricing`,
-        'warning',
-        'Review token usage. Consider simpler prompt or skip this category.'
-      );
-      // Still set a price but flag it
-      price = Math.max(cost.totalCost + MIN_PRICE, MAX_PRICE);
+    // Floor: must always earn at least MIN_PRICE profit.
+    if (price - cost.totalCost < MIN_PRICE) {
+      price = Math.round((cost.totalCost + MIN_PRICE) / 50) * 50;
     }
-
-    // Clamp to max
-    price = Math.min(MAX_PRICE, price);
-
-    // Round to nearest $5
-    price = Math.round(price / 5) * 5;
-
-    // Never below $150
-    price = Math.max(MIN_PRICE, price);
+    price = Math.min(MAX_PRICE, Math.max(MIN_PRICE, price));
 
     this.priceCache.set(businessId, price);
 
@@ -126,10 +147,16 @@ export class Pricer extends BaseAgent {
       tokens: cost.totalTokens,
       margin: PROFIT_MARGIN,
       guaranteedProfit: price - cost.totalCost,
-      rawPrice: cost.totalCost * PROFIT_MARGIN,
+      rawPrice: price,
       finalPrice: price,
+      tier: price,
       needsReview: cost.totalCost > 30,
     };
+  }
+
+  /** Preview a quote without a business record yet (used by Postman). */
+  quoteFor(business) {
+    return pickTier(business);
   }
 
   /**

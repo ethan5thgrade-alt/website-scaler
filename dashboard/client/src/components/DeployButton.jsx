@@ -3,16 +3,40 @@ import { useState } from 'react';
 export default function DeployButton({ running, onStatusChange }) {
   const [deploying, setDeploying] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
+  const [preflight, setPreflight] = useState(null);
   const [config, setConfig] = useState({
     zipCodes: '90210, 90211, 90212',
     categories: 'restaurant, salon, dentist, gym',
     maxLeads: 20,
     dailyEmailLimit: 50,
+    skipPreflight: false,
   });
+
+  async function runPreflight() {
+    const r = await fetch('/api/settings/preflight', { method: 'POST' });
+    const j = await r.json();
+    setPreflight(j);
+    return j;
+  }
 
   async function handleDeploy() {
     setDeploying(true);
     try {
+      // Pre-flight: verify keys before spending real money. User can skip
+      // for mock runs via the config panel.
+      if (!config.skipPreflight) {
+        const pf = await runPreflight();
+        // If ANY provider has a key set but fails, abort. If providers are
+        // simply missing (no key), allow — that's intentional mock mode.
+        const hardFails = pf.results.filter(
+          (r) => !r.ok && !/No key set/i.test(r.detail),
+        );
+        if (hardFails.length > 0) {
+          setDeploying(false);
+          return;
+        }
+      }
+
       const body = {
         zipCodes: config.zipCodes.split(',').map((s) => s.trim()).filter(Boolean),
         categories: config.categories.split(',').map((s) => s.trim()).filter(Boolean),
@@ -38,6 +62,22 @@ export default function DeployButton({ running, onStatusChange }) {
       onStatusChange();
     } catch (err) {
       console.error('Stop failed:', err);
+    }
+  }
+
+  async function handleTestOne() {
+    try {
+      await fetch('/api/test-run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          zipCode: config.zipCodes.split(',')[0].trim() || '90210',
+          category: config.categories.split(',')[0].trim() || 'restaurant',
+        }),
+      });
+      onStatusChange();
+    } catch (err) {
+      console.error('Test run failed:', err);
     }
   }
 
@@ -79,6 +119,16 @@ export default function DeployButton({ running, onStatusChange }) {
           </>
         )}
 
+        {!running && (
+          <button
+            onClick={handleTestOne}
+            className="px-4 py-3 bg-dark-700 hover:bg-dark-600 text-gray-200 rounded-lg transition text-sm border border-dark-500"
+            title="Run ONE business end-to-end. No emails sent. Cheapest way to verify keys work."
+          >
+            Test one
+          </button>
+        )}
+
         <button
           onClick={() => setShowConfig(!showConfig)}
           className="px-4 py-3 bg-dark-600 hover:bg-dark-500 text-gray-300 rounded-lg transition text-sm"
@@ -86,6 +136,27 @@ export default function DeployButton({ running, onStatusChange }) {
           {showConfig ? 'Hide Config' : 'Configure'}
         </button>
       </div>
+
+      {/* Pre-flight results — only shown when there's a hard failure. Passes +
+          "no key set" entries stay quiet so the UI doesn't flood in mock mode. */}
+      {preflight && preflight.results.some((r) => !r.ok && !/No key set/i.test(r.detail)) && (
+        <div className="mt-4 p-3 rounded border border-red-500/30 bg-red-500/10 text-sm space-y-1">
+          <div className="font-semibold text-red-400">Pre-flight failed — fix these before deploying:</div>
+          {preflight.results
+            .filter((r) => !r.ok && !/No key set/i.test(r.detail))
+            .map((r) => (
+              <div key={r.provider} className="text-red-300/80 font-mono text-xs">
+                <span className="uppercase text-red-300">{r.provider}</span>: {r.detail}
+              </div>
+            ))}
+          <button
+            onClick={() => setConfig({ ...config, skipPreflight: true })}
+            className="text-xs text-amber-400 hover:text-amber-300 underline mt-2"
+          >
+            Skip pre-flight and deploy anyway
+          </button>
+        </div>
+      )}
 
       {showConfig && (
         <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-4 pt-4 border-t border-dark-500">

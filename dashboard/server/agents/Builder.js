@@ -1,6 +1,8 @@
 import { BaseAgent } from './BaseAgent.js';
 import { getSetting } from '../database.js';
 import Anthropic from '@anthropic-ai/sdk';
+import { logClaudeUsage } from '../services/cost-tracker.js';
+import { pickStyle } from './design-styles.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -8,6 +10,8 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SITES_DIR = path.join(__dirname, '..', '..', 'generated-sites');
 
+// Legacy inline style map — now read from design-styles.js. Kept for tests
+// that import DESIGN_STYLES directly; new code should call pickStyle().
 const DESIGN_STYLES = {
   restaurant: {
     primary: '#8B4513', accent: '#D2691E', bg: '#FFF8F0', text: '#2C1810',
@@ -77,8 +81,8 @@ export class Builder extends BaseAgent {
     const startTime = Date.now();
     this.log(`Building site for "${business.name}"`, 'info');
 
-    const category = business.category || 'default';
-    const design = DESIGN_STYLES[category] || DESIGN_STYLES.default;
+    // design-styles.js is the source of truth — 20+ categories covered.
+    const design = pickStyle(business.category || 'default');
 
     // Use real Claude when key is set; fall back to templates otherwise.
     const anthropicKey = getSetting('anthropic_api_key');
@@ -143,8 +147,9 @@ export class Builder extends BaseAgent {
       .filter(Boolean)
       .join('\n');
 
+    const model = 'claude-haiku-4-5';
     const response = await client.messages.create({
-      model: 'claude-haiku-4-5',
+      model,
       max_tokens: 400,
       system:
         'You write short, grounded website copy for small local businesses. ' +
@@ -153,6 +158,9 @@ export class Builder extends BaseAgent {
         'Return ONLY valid JSON matching: {"tagline": "5-9 word phrase", "about": "50-90 word paragraph (2-3 sentences)"}',
       messages: [{ role: 'user', content: userInput }],
     });
+
+    // Real-cost accounting — feeds the daily budget cap + dashboard meter.
+    logClaudeUsage({ agent: this.name, model, usage: response.usage });
 
     const textBlock = response.content.find((b) => b.type === 'text');
     const raw = textBlock?.text?.trim() || '';

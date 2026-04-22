@@ -1,5 +1,6 @@
 import { BaseAgent } from './BaseAgent.js';
 import { getSetting } from '../database.js';
+import { logGoogleMapsUsage } from '../services/cost-tracker.js';
 
 // Mock business data for when no API key is configured
 const MOCK_BUSINESSES = [
@@ -30,8 +31,8 @@ export class Scout extends BaseAgent {
       return this.findBusinessesFromApi(zipCode, category, limit, apiKey);
     }
 
-    // Mock mode
-    this.log(`Searching for ${category} businesses in ${zipCode} (mock mode)`, 'info');
+    // Mock mode — no Google Maps key configured
+    this.log(`Searching for ${category} in ${zipCode} [MOCK: add Google Maps API key for real data]`, 'info');
     await this.simulateDelay(800, 2000);
 
     const filtered = MOCK_BUSINESSES
@@ -98,6 +99,7 @@ export class Scout extends BaseAgent {
 
         const data = await res.json();
         requestsMade++;
+        logGoogleMapsUsage({ agent: this.name, sku: 'text_search' });
 
         for (const p of data.places || []) {
           if (p.websiteUri) continue; // already has a site — skip
