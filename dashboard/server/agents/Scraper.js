@@ -1,4 +1,5 @@
 import { BaseAgent } from './BaseAgent.js';
+import { getSetting } from '../database.js';
 
 const MOCK_OWNERS = [
   { name: 'Rosa Martinez', email: 'rosa@mamabakery.com' },
@@ -46,12 +47,14 @@ export class Scraper extends BaseAgent {
     this.heartbeat();
     this.log(`Enriching data for ${business.name}`, 'info');
 
-    await this.simulateDelay(500, 1500);
+    const apiKey = getSetting('google_maps_api_key');
+    if (apiKey && business.place_id && !business.place_id.startsWith('mock_')) {
+      const live = await this.enrichFromApi(business, apiKey);
+      if (live) return live;
+      // fall through to mock if the API call failed
+    }
 
-    // In real implementation, this would:
-    // 1. Call Google Places Details API for full info
-    // 2. Scrape web for owner email (LinkedIn, public records, etc.)
-    // 3. Validate and clean data
+    await this.simulateDelay(500, 1500);
 
     const ownerIdx = Math.floor(Math.random() * MOCK_OWNERS.length);
     const owner = MOCK_OWNERS[ownerIdx];
@@ -90,5 +93,102 @@ export class Scraper extends BaseAgent {
   simulateDelay(min, max) {
     const delay = Math.floor(Math.random() * (max - min)) + min;
     return new Promise((r) => setTimeout(r, delay));
+  }
+
+  async enrichFromApi(business, apiKey) {
+    // Places API (New) — Place Details. Field mask = cost control.
+    // Note: owner email is not a public field; we keep the mock owner email
+    // for now. A real deploy would plug in Hunter.io or a domain-guess fallback.
+    const fieldMask = [
+      'id',
+      'displayName',
+      'formattedAddress',
+      'nationalPhoneNumber',
+      'regularOpeningHours',
+      'rating',
+      'userRatingCount',
+      'photos',
+      'reviews',
+      'editorialSummary',
+      'websiteUri',
+      'googleMapsUri',
+    ].join(',');
+
+    try {
+      const res = await fetch(`https://places.googleapis.com/v1/places/${business.place_id}`, {
+        headers: { 'X-Goog-Api-Key': apiKey, 'X-Goog-FieldMask': fieldMask },
+      });
+      if (!res.ok) {
+        this.log(`Places Details ${res.status} for ${business.name} — falling back to mock`, 'warning');
+        return null;
+      }
+      const p = await res.json();
+
+      // Convert weekdayDescriptions → { monday: "9am-5pm", ... }
+      const hours = {};
+      for (const line of p.regularOpeningHours?.weekdayDescriptions || []) {
+        const [day, ...rest] = line.split(':');
+        if (day && rest.length) hours[day.trim().toLowerCase()] = rest.join(':').trim();
+      }
+
+      // Photos: resolve the first 3 to usable URLs. `skipHttpRedirect` returns
+      // JSON with the final photo URL instead of a redirect.
+      const photos = [];
+      for (const ph of (p.photos || []).slice(0, 3)) {
+        try {
+          const pr = await fetch(
+            `https://places.googleapis.com/v1/${ph.name}/media?maxWidthPx=1200&skipHttpRedirect=true`,
+            { headers: { 'X-Goog-Api-Key': apiKey } },
+          );
+          if (pr.ok) {
+            const { photoUri } = await pr.json();
+            if (photoUri) photos.push(photoUri);
+          }
+        } catch (_) {
+          // non-fatal — just skip this photo
+        }
+      }
+
+      const category = business.category || 'restaurant';
+      const services = MOCK_SERVICES[category] || MOCK_SERVICES.restaurant;
+
+      // Owner email: still guessed. Plug Hunter.io in here when the key exists.
+      const ownerIdx = Math.floor(Math.random() * MOCK_OWNERS.length);
+      const owner = MOCK_OWNERS[ownerIdx];
+
+      const enriched = {
+        ...business,
+        name: p.displayName?.text || business.name,
+        address: p.formattedAddress || business.address,
+        phone: p.nationalPhoneNumber || business.phone,
+        rating: p.rating ?? business.rating,
+        review_count: p.userRatingCount ?? business.review_count,
+        hours: Object.keys(hours).length ? hours : MOCK_HOURS,
+        services,
+        photos: photos.length
+          ? photos
+          : [
+              `https://picsum.photos/seed/${business.place_id}/800/600`,
+              `https://picsum.photos/seed/${business.place_id}2/800/600`,
+            ],
+        reviews: (p.reviews || []).slice(0, 3).map((r) => ({
+          author: r.authorAttribution?.displayName || 'Anonymous',
+          text: r.text?.text || '',
+          rating: r.rating || 0,
+        })),
+        editorial_summary: p.editorialSummary?.text,
+        owner_name: owner.name,
+        owner_email: owner.email, // TODO: replace with Hunter.io lookup
+        enriched: true,
+        enrichment_source: 'google_places_api',
+      };
+
+      this.log(`Enriched ${business.name} via Places API (${photos.length} photos)`, 'success');
+      this.completeTask();
+      return enriched;
+    } catch (err) {
+      this.logIssue(`Scraper API call failed for ${business.name}: ${err.message}`, 'warning');
+      return null;
+    }
   }
 }

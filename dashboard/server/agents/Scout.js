@@ -49,22 +49,108 @@ export class Scout extends BaseAgent {
   }
 
   async findBusinessesFromApi(zipCode, category, limit, apiKey) {
-    // TODO: Replace with real Google Maps Places API call
-    // const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&radius=5000&type=${category}&key=${apiKey}`;
-    // const response = await fetch(url);
-    // const data = await response.json();
-    // Filter for businesses without websites
-    // Return normalized results
+    // Places API (New) v1 Text Search. Field mask keeps cost minimal — we only
+    // pay for fields we request. `websiteUri` is how we filter: if the listing
+    // has a website, we skip it (that's our qualifier — they don't need us).
+    const query = `${category === 'all' ? 'businesses' : category} in ${zipCode}`;
+    const fieldMask = [
+      'places.id',
+      'places.displayName',
+      'places.formattedAddress',
+      'places.types',
+      'places.websiteUri',
+      'places.rating',
+      'places.userRatingCount',
+      'places.nationalPhoneNumber',
+      'places.location',
+      'places.googleMapsUri',
+      'nextPageToken',
+    ].join(',');
 
-    this.log(`[API] Would search Google Maps for ${category} in ${zipCode}`, 'info');
-    await this.simulateDelay(1000, 3000);
+    const qualified = [];
+    let pageToken;
+    let requestsMade = 0;
 
-    // Fallback to mock for now
-    return MOCK_BUSINESSES.slice(0, limit).map((b) => ({
-      ...b,
-      place_id: `api_${b.place_id}_${Date.now()}`,
-      address: `${b.address}, ${zipCode}`,
-    }));
+    try {
+      do {
+        const body = { textQuery: query, pageSize: 20 };
+        if (pageToken) body.pageToken = pageToken;
+
+        const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': apiKey,
+            'X-Goog-FieldMask': fieldMask,
+          },
+          body: JSON.stringify(body),
+        });
+
+        if (!res.ok) {
+          const text = await res.text();
+          this.logIssue(
+            `Google Maps API ${res.status}: ${text.slice(0, 200)}`,
+            'error',
+            'Check the GOOGLE_MAPS_API_KEY and enable Places API in Google Cloud Console.',
+          );
+          break;
+        }
+
+        const data = await res.json();
+        requestsMade++;
+
+        for (const p of data.places || []) {
+          if (p.websiteUri) continue; // already has a site — skip
+          qualified.push({
+            place_id: p.id,
+            name: p.displayName?.text || '',
+            category: category || this.inferCategory(p.types),
+            rating: p.rating,
+            review_count: p.userRatingCount,
+            address: p.formattedAddress || '',
+            phone: p.nationalPhoneNumber,
+            latitude: p.location?.latitude,
+            longitude: p.location?.longitude,
+            maps_url: p.googleMapsUri,
+          });
+          if (qualified.length >= limit) break;
+        }
+
+        pageToken = data.nextPageToken;
+      } while (pageToken && qualified.length < limit && requestsMade < 3);
+
+      this.log(
+        `Found ${qualified.length} businesses without websites in ${zipCode} (${requestsMade} API calls)`,
+        qualified.length > 0 ? 'success' : 'warning',
+      );
+      this.completeTask();
+      return qualified;
+    } catch (err) {
+      this.logIssue(`Scout API call failed: ${err.message}`, 'error');
+      return [];
+    }
+  }
+
+  inferCategory(types = []) {
+    const map = {
+      restaurant: 'restaurant',
+      cafe: 'restaurant',
+      bakery: 'bakery',
+      bar: 'restaurant',
+      beauty_salon: 'salon',
+      hair_care: 'salon',
+      nail_salon: 'salon',
+      spa: 'salon',
+      gym: 'gym',
+      dentist: 'dentist',
+      doctor: 'dentist',
+      lawyer: 'lawyer',
+      florist: 'florist',
+      car_repair: 'auto_repair',
+      pet_store: 'pet_service',
+    };
+    for (const t of types) if (map[t]) return map[t];
+    return types[0] || 'other';
   }
 
   simulateDelay(min, max) {

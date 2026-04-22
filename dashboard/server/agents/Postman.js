@@ -63,23 +63,48 @@ export class Postman extends BaseAgent {
   }
 
   async sendViaApi(to, subject, body, apiKey) {
-    // TODO: Replace with real SendGrid/Mailgun/SES API call
-    // Example SendGrid:
-    // const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
-    //   method: 'POST',
-    //   headers: {
-    //     'Authorization': `Bearer ${apiKey}`,
-    //     'Content-Type': 'application/json',
-    //   },
-    //   body: JSON.stringify({
-    //     personalizations: [{ to: [{ email: to }] }],
-    //     from: { email: getSetting('sendgrid_from_email') },
-    //     subject,
-    //     content: [{ type: 'text/plain', value: body }],
-    //   }),
-    // });
+    const fromEmail = getSetting('sendgrid_from_email');
+    if (!fromEmail) {
+      this.logIssue(
+        'SENDGRID_FROM_EMAIL not set — cannot send real emails',
+        'error',
+        'Set SENDGRID_FROM_EMAIL in your .env and make sure the sending domain has SPF + DKIM configured in SendGrid.',
+      );
+      return;
+    }
 
-    this.log(`[API] Would send email to ${to} via SendGrid`, 'info');
-    await new Promise((r) => setTimeout(r, 300));
+    try {
+      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: to }] }],
+          from: { email: fromEmail, name: 'Website Scaler' },
+          subject,
+          content: [{ type: 'text/plain', value: body }],
+          tracking_settings: {
+            click_tracking: { enable: true, enable_text: false },
+            open_tracking: { enable: true },
+          },
+        }),
+      });
+
+      // SendGrid returns 202 Accepted on success with empty body.
+      if (res.status === 202) {
+        this.log(`Sent pitch to ${to} via SendGrid`, 'success');
+        return;
+      }
+      const errText = await res.text();
+      this.logIssue(
+        `SendGrid ${res.status} for ${to}: ${errText.slice(0, 200)}`,
+        'error',
+        'Verify the API key, sending domain authentication, and that the recipient isn\'t on a suppression list.',
+      );
+    } catch (err) {
+      this.logIssue(`Email send failed for ${to}: ${err.message}`, 'error');
+    }
   }
 }
