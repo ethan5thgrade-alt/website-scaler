@@ -24,6 +24,26 @@ const SETTING_GROUPS = [
     ],
   },
   {
+    title: 'Call Booking (Calendly)',
+    fields: [
+      { key: 'calendly_link', label: 'Calendly Link', type: 'text', placeholder: 'https://calendly.com/you/15min' },
+      { key: 'calendly_webhook_secret', label: 'Webhook Secret', type: 'password', placeholder: 'Used to sign unsubscribe tokens' },
+    ],
+  },
+  {
+    title: 'Compliance',
+    fields: [
+      { key: 'sender_physical_address', label: 'Sender Physical Address (CAN-SPAM)', type: 'text', placeholder: '123 Main St, City, ST 12345' },
+      { key: 'unsubscribe_base_url', label: 'Unsubscribe Base URL', type: 'text', placeholder: 'https://yourapp.example.com' },
+    ],
+  },
+  {
+    title: 'Lead Quality',
+    fields: [
+      { key: 'min_review_count', label: 'Minimum Review Count', type: 'number', placeholder: '5' },
+    ],
+  },
+  {
     title: 'Limits & Configuration',
     fields: [
       { key: 'daily_token_limit', label: 'Daily Token Limit', type: 'number' },

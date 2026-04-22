@@ -139,12 +139,38 @@ router.get('/pipelines', (req, res) => {
   res.json(pipelines);
 });
 
-// Businesses
+// Businesses — supports ?q=text&zip=X&category=Y&status=Z&limit=N
 router.get('/businesses', (req, res) => {
   const db = getDb();
-  const limit = parseInt(req.query.limit) || 50;
-  const businesses = db.prepare('SELECT * FROM businesses ORDER BY created_at DESC LIMIT ?').all(limit);
-  res.json(businesses);
+  const limit = Math.min(500, parseInt(req.query.limit) || 100);
+
+  const wheres = [];
+  const params = [];
+  if (req.query.q) {
+    wheres.push('(name LIKE ? OR address LIKE ? OR phone LIKE ?)');
+    const like = `%${req.query.q}%`;
+    params.push(like, like, like);
+  }
+  if (req.query.zip) { wheres.push('zip_code = ?'); params.push(req.query.zip); }
+  if (req.query.category) { wheres.push('category = ?'); params.push(req.query.category); }
+  if (req.query.status) { wheres.push('status = ?'); params.push(req.query.status); }
+
+  const sql = `
+    SELECT id, place_id, name, address, phone, category, rating, review_count,
+           zip_code, status, priority, owner_name, owner_email, created_at
+    FROM businesses
+    ${wheres.length ? 'WHERE ' + wheres.join(' AND ') : ''}
+    ORDER BY priority DESC, created_at DESC
+    LIMIT ?
+  `;
+  const businesses = db.prepare(sql).all(...params, limit);
+
+  // Distinct facets for the filter UI.
+  const zips = db.prepare("SELECT DISTINCT zip_code FROM businesses WHERE zip_code IS NOT NULL AND zip_code != '' ORDER BY zip_code").all().map((r) => r.zip_code);
+  const categories = db.prepare("SELECT DISTINCT category FROM businesses WHERE category IS NOT NULL AND category != '' ORDER BY category").all().map((r) => r.category);
+  const statuses = db.prepare("SELECT DISTINCT status FROM businesses WHERE status IS NOT NULL ORDER BY status").all().map((r) => r.status);
+
+  res.json({ businesses, facets: { zips, categories, statuses } });
 });
 
 // Pricing
