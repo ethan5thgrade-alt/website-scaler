@@ -2,6 +2,9 @@ import { BaseAgent } from './BaseAgent.js';
 import { getDb, getSetting } from '../database.js';
 import { logEmailUsage } from '../services/cost-tracker.js';
 import { pickTemplate } from './email-templates.js';
+import { Pricer } from './Pricer.js';
+
+const quoter = new Pricer(() => {});
 
 export class Postman extends BaseAgent {
   constructor(broadcast) {
@@ -25,10 +28,13 @@ export class Postman extends BaseAgent {
       await new Promise((r) => setTimeout(r, 5000));
     }
 
-    // Rotate through 22 templates to break spam-filter pattern matching.
+    // Variable quote per-business — $100 for a small florist, $1000+ for a
+    // law firm with hundreds of reviews. Pricer picks the tier from signals.
+    const price = quoter.quoteFor(business);
+
     const template = pickTemplate(business.category);
-    const subject = template.subject(business);
-    const body = template.body(business, previewUrl);
+    const subject = template.subject(business, price);
+    const body = template.body(business, previewUrl, price);
 
     const apiKey = getSetting('sendgrid_api_key');
 
@@ -37,13 +43,13 @@ export class Postman extends BaseAgent {
     } else {
       // Mock mode
       await new Promise((r) => setTimeout(r, Math.random() * 500 + 200));
-      this.log(`Sent pitch to ${business.owner_email} for "${business.name}"`, 'success');
+      this.log(`Sent pitch to ${business.owner_email} for "${business.name}" — $${price}`, 'success');
     }
 
     this.sentThisHour++;
     this.completeTask();
 
-    return { subject, body, to: business.owner_email };
+    return { subject, body, to: business.owner_email, price };
   }
 
   async sendViaApi(to, subject, body, apiKey) {

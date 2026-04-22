@@ -15,6 +15,7 @@ import { Scraper } from './agents/Scraper.js';
 import { Builder } from './agents/Builder.js';
 import { Postman } from './agents/Postman.js';
 import { Accountant } from './agents/Accountant.js';
+import { Pricer } from './agents/Pricer.js';
 import { SentinelClient } from './agents/Sentinel.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -58,6 +59,7 @@ function initAgents() {
   agents.builderGamma = new Builder('Builder-Gamma', broadcast);
   agents.postman = new Postman(broadcast);
   agents.accountant = new Accountant(broadcast);
+  agents.pricer = new Pricer(broadcast);
   agents.sentinel = new SentinelClient(broadcast);
 }
 
@@ -285,8 +287,10 @@ async function runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit) {
           businessId = result.lastInsertRowid;
         }
 
-        // Tokens are now logged automatically by each agent via cost-tracker.
-        // Accountant reads aggregates from DB + emits budget_tick events.
+        // Global token usage is auto-logged via cost-tracker inside each agent.
+        // Pricer additionally tracks per-business costs for dynamic pricing.
+        agents.pricer.trackBusinessCost(businessId, 'Scout', 150, 'default', 'find');
+        agents.pricer.trackBusinessCost(businessId, 'Scraper', 200, 'default', 'scrape');
 
         // Commander assigns to a builder (round-robin)
         const builder = builderAgents[builderIndex % 3];
@@ -301,7 +305,8 @@ async function runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit) {
           'INSERT INTO sites (business_id, builder_agent, html_path, preview_url, build_time_ms, design_style, status) VALUES (?, ?, ?, ?, ?, ?, ?)'
         ).run(businessId, builder.name, siteResult.htmlPath, siteResult.previewUrl, siteResult.buildTime, siteResult.designStyle, 'completed');
 
-        // Builder's Claude call already logged its own token usage.
+        // Builder logs its own Claude token usage via cost-tracker.
+        agents.pricer.trackBusinessCost(businessId, builder.name, 2000, 'claude-sonnet-4-6', 'build');
 
         db.prepare('UPDATE businesses SET status = ? WHERE id = ?').run('site_built', businessId);
 
@@ -323,7 +328,11 @@ async function runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit) {
               'INSERT INTO emails (business_id, site_id, to_email, to_name, subject, body, status, sent_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)'
             ).run(businessId, siteRow.lastInsertRowid, enriched.owner_email, enriched.owner_name, emailResult.subject, emailResult.body, 'sent');
 
-            // Email-send cost already logged inside Postman.sendViaApi.
+            // Postman logs its own send cost via cost-tracker.
+            agents.pricer.trackBusinessCost(businessId, 'Postman', 500, 'default', 'email');
+
+            const pricing = agents.pricer.calculatePrice(businessId, enriched);
+            agents.pricer.log(`${enriched.name}: cost $${pricing.cost.toFixed(4)} → quote $${pricing.finalPrice}`);
 
             if (currentPipelineId) {
               db.prepare('UPDATE pipeline_runs SET emails_sent = emails_sent + 1 WHERE id = ?').run(currentPipelineId);

@@ -142,6 +142,20 @@ function initSchema() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS business_costs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      business_id INTEGER NOT NULL,
+      agent_name TEXT,
+      step TEXT,
+      tokens_used INTEGER DEFAULT 0,
+      token_cost REAL DEFAULT 0,
+      api_cost REAL DEFAULT 0,
+      total_cost REAL DEFAULT 0,
+      model TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (business_id) REFERENCES businesses(id)
+    );
+
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT,
@@ -180,9 +194,10 @@ function initSchema() {
     daily_email_limit: '200',
     max_emails_per_hour: '50',
     site_base_url: 'http://localhost:3001/sites',
-    // Hard daily USD cap. When today's spend exceeds this, pipeline auto-stops.
-    // 5 is a safe default for a first test run; user can raise on Settings.
     daily_budget_usd: '5',
+    current_price: '50',
+    avg_cost_per_business: '0',
+    price_sample_size: '0',
   };
   for (const [key, value] of Object.entries(defaults)) {
     insertSetting.run(key, value);
@@ -195,7 +210,7 @@ function initSchema() {
   const agents = [
     'Commander', 'Scout', 'Scraper',
     'Builder-Alpha', 'Builder-Beta', 'Builder-Gamma',
-    'Postman', 'Accountant', 'Sentinel'
+    'Postman', 'Accountant', 'Pricer', 'Sentinel'
   ];
   for (const name of agents) {
     insertAgent.run(name, 'offline');
