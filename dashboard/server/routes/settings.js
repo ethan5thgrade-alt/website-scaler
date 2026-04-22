@@ -44,8 +44,67 @@ router.get('/validate', (_req, res) => {
   res.json({ checks, allValid });
 });
 
+// POST /api/settings/preflight — runs all provider probes in parallel. One
+// pass/fail per provider plus an overall boolean. Use this before starting a
+// real-keys run so you don't burn time before discovering a 401.
+router.post('/preflight', async (_req, res) => {
+  const providers = ['google_maps', 'anthropic', 'sendgrid'];
+  const results = await Promise.all(
+    providers.map(async (p) => {
+      try {
+        const r = await _runProbe(p);
+        return { provider: p, ...r };
+      } catch (err) {
+        return { provider: p, ok: false, detail: err.message || String(err) };
+      }
+    }),
+  );
+  const allOk = results.every((r) => r.ok);
+  res.json({ allOk, results });
+});
+
 // POST /api/settings/test-key — actually hits the provider with a tiny
 // no-op request to confirm the key works. Returns { ok, detail }.
+async function _runProbe(provider) {
+  if (provider === 'google_maps') {
+    const key = getSetting('google_maps_api_key');
+    if (!key) return { ok: false, detail: 'No key set.' };
+    const r = await fetch('https://places.googleapis.com/v1/places:searchText', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': key,
+        'X-Goog-FieldMask': 'places.id',
+      },
+      body: JSON.stringify({ textQuery: 'coffee in 90210', pageSize: 1 }),
+    });
+    if (r.ok) return { ok: true, detail: 'Places API responded 200.' };
+    return { ok: false, detail: `${r.status}: ${(await r.text()).slice(0, 200)}` };
+  }
+  if (provider === 'anthropic') {
+    const key = getSetting('anthropic_api_key');
+    if (!key) return { ok: false, detail: 'No key set.' };
+    const client = new Anthropic({ apiKey: key });
+    const resp = await client.messages.create({
+      model: 'claude-haiku-4-5',
+      max_tokens: 16,
+      messages: [{ role: 'user', content: 'Reply with only: ok' }],
+    });
+    const txt = resp.content.find((b) => b.type === 'text')?.text || '';
+    return { ok: true, detail: `Claude Haiku replied: "${txt.trim().slice(0, 40)}"` };
+  }
+  if (provider === 'sendgrid') {
+    const key = getSetting('sendgrid_api_key');
+    if (!key) return { ok: false, detail: 'No key set.' };
+    const r = await fetch('https://api.sendgrid.com/v3/scopes', {
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    if (r.ok) return { ok: true, detail: 'SendGrid API responded 200.' };
+    return { ok: false, detail: `${r.status}: ${(await r.text()).slice(0, 200)}` };
+  }
+  return { ok: false, detail: `Unknown provider: ${provider}` };
+}
+
 router.post('/test-key', async (req, res) => {
   const { provider } = req.body;
 
