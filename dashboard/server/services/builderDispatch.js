@@ -2,6 +2,8 @@
 // the Calendly webhook when a prospect books a call, and by the "build
 // demo now" button on the dashboard.
 
+import { withRetry, withTimeout } from './retry.js';
+
 let registry = null;
 
 export function registerBuilders(builders, deps) {
@@ -37,7 +39,15 @@ export async function buildDemoForBusiness(businessId, { reason = 'manual' } = {
   const builder = builders[registry.rr++ % builders.length];
   broadcast('demo_build_started', { businessId, reason, builder: builder.name });
 
-  const result = await builder.buildSite(enriched);
+  // Each build gets a 60s cap, and we retry once on a different builder if
+  // the first one blows up (e.g. LLM timeout, disk error).
+  const result = await withRetry(
+    async (attempt) => {
+      const b = attempt === 0 ? builder : builders[(registry.rr++) % builders.length];
+      return withTimeout(() => b.buildSite(enriched), 60_000, `build:${b.name}`);
+    },
+    { retries: 1, baseMs: 500, label: `build:${biz.id}` },
+  );
 
   const siteRow = db.prepare(
     'INSERT INTO sites (business_id, builder_agent, html_path, preview_url, build_time_ms, design_style, status) VALUES (?, ?, ?, ?, ?, ?, ?)'

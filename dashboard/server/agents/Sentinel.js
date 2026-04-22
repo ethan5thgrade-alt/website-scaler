@@ -1,5 +1,11 @@
 import { BaseAgent } from './BaseAgent.js';
 import { getDb, getSetting } from '../database.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DB_PATH = path.join(__dirname, '..', '..', 'data', 'scaler.db');
 
 export class SentinelClient extends BaseAgent {
   constructor(broadcast) {
@@ -26,12 +32,16 @@ export class SentinelClient extends BaseAgent {
     // Check API keys every 60 seconds
     this.apiCheckInterval = setInterval(() => this.checkApiKeys(), 60000);
 
+    // Resource checks every 60 seconds (disk, DB size, error rate).
+    this.resourceInterval = setInterval(() => this.checkResources(), 60000);
+
     this.log('Sentinel online — monitoring all agents', 'success');
   }
 
   async stop() {
     if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
     if (this.apiCheckInterval) clearInterval(this.apiCheckInterval);
+    if (this.resourceInterval) clearInterval(this.resourceInterval);
 
     const db = getDb();
     db.prepare("INSERT INTO uptime_logs (event_type, agent_name, details) VALUES (?, ?, ?)").run('stop', 'Sentinel', 'Sentinel service stopped');
@@ -193,6 +203,89 @@ export class SentinelClient extends BaseAgent {
 
     this.broadcast('preflight_results', { results, allPass });
     return { results, allPass };
+  }
+
+  // Resource checks — disk, DB size, error rate, memory. Each fires a
+  // single issue when it crosses the threshold; the issues are idempotent
+  // (we check recent unresolved rows before re-logging).
+  checkResources() {
+    try {
+      // DB file size — SQLite bloat is a classic operational pitfall.
+      if (fs.existsSync(DB_PATH)) {
+        const bytes = fs.statSync(DB_PATH).size;
+        const mb = bytes / (1024 * 1024);
+        this.broadcast('resource_check', { kind: 'db_size_mb', value: Math.round(mb) });
+        if (mb > 500) {
+          this.logIssueOnce(
+            'db_size_large',
+            `SQLite DB is ${Math.round(mb)} MB`,
+            'warning',
+            'Archive old agent_logs rows and run VACUUM, or plan a migration to Postgres.'
+          );
+        }
+      }
+
+      // WAL file — unbounded growth is a known SQLite footgun.
+      const walPath = DB_PATH + '-wal';
+      if (fs.existsSync(walPath)) {
+        const walMb = fs.statSync(walPath).size / (1024 * 1024);
+        this.broadcast('resource_check', { kind: 'wal_size_mb', value: Math.round(walMb) });
+        if (walMb > 100) {
+          this.logIssueOnce(
+            'wal_size_large',
+            `WAL file is ${Math.round(walMb)} MB`,
+            'warning',
+            'Run PRAGMA wal_checkpoint(TRUNCATE) or restart the server to flush the WAL.'
+          );
+        }
+      }
+
+      // Error rate — flag if > 5 errors in the last 5 minutes.
+      const db = getDb();
+      const recentErrors = db.prepare(
+        "SELECT COUNT(*) as n FROM agent_logs WHERE status = 'error' AND datetime(created_at) > datetime('now', '-5 minutes')"
+      ).get().n;
+      this.broadcast('resource_check', { kind: 'errors_5m', value: recentErrors });
+      if (recentErrors > 5) {
+        this.logIssueOnce(
+          'error_rate_high',
+          `${recentErrors} errors in the last 5 minutes`,
+          'error',
+          'Check recent agent_logs for the common failure mode. Consider pausing the pipeline.'
+        );
+      }
+
+      // Heap memory — alert >512MB which usually means a leak in a long run.
+      const heapMb = process.memoryUsage().heapUsed / (1024 * 1024);
+      this.broadcast('resource_check', { kind: 'heap_mb', value: Math.round(heapMb) });
+      if (heapMb > 512) {
+        this.logIssueOnce(
+          'heap_high',
+          `Node heap at ${Math.round(heapMb)} MB`,
+          'warning',
+          'Consider restarting the process; investigate for leaks in long-running agent state.'
+        );
+      }
+    } catch (err) {
+      // Never let monitoring crash the monitor.
+      console.warn('[Sentinel] resource check error:', err.message);
+    }
+  }
+
+  // Dedupes issues: only logs a given `key` if there isn't already an
+  // unresolved issue with the same suggested_fix tag.
+  logIssueOnce(key, description, severity, suggestedFix) {
+    try {
+      const db = getDb();
+      const existing = db.prepare(
+        "SELECT id FROM issues WHERE resolved = 0 AND suggested_fix LIKE ?"
+      ).get(`%[${key}]%`);
+      if (existing) return;
+      const tagged = `[${key}] ${suggestedFix}`;
+      this.logIssue(description, severity, tagged);
+    } catch {
+      this.logIssue(description, severity, suggestedFix);
+    }
   }
 
   getSecurityReport() {
