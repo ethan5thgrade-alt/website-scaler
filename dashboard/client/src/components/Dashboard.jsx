@@ -6,6 +6,7 @@ import IssuesPanel from './IssuesPanel.jsx';
 import SalesTracker from './SalesTracker.jsx';
 import SecurityPanel from './SecurityPanel.jsx';
 import CostMeter from './CostMeter.jsx';
+import ROIPanel from './ROIPanel.jsx';
 
 export default function Dashboard({ ws }) {
   const [stats, setStats] = useState({
@@ -79,13 +80,16 @@ export default function Dashboard({ ws }) {
         onStatusChange={() => fetchAll()}
       />
 
-      {/* Stats Cards + Cost Meter */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+      {/* Stats + Cost + ROI */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         <div className="lg:col-span-3">
           <StatsCards stats={stats} heartbeats={heartbeats} />
         </div>
         <div>
           <CostMeter ws={ws} />
+        </div>
+        <div>
+          <ROIPanel />
         </div>
       </div>
 

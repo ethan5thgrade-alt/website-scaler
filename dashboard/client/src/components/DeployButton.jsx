@@ -65,6 +65,22 @@ export default function DeployButton({ running, onStatusChange }) {
     }
   }
 
+  async function handleTestOne() {
+    try {
+      await fetch('/api/test-run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          zipCode: config.zipCodes.split(',')[0].trim() || '90210',
+          category: config.categories.split(',')[0].trim() || 'restaurant',
+        }),
+      });
+      onStatusChange();
+    } catch (err) {
+      console.error('Test run failed:', err);
+    }
+  }
+
   return (
     <div className="card">
       <div className="flex items-center gap-4 flex-wrap">
@@ -101,6 +117,16 @@ export default function DeployButton({ running, onStatusChange }) {
               STOP ALL
             </button>
           </>
+        )}
+
+        {!running && (
+          <button
+            onClick={handleTestOne}
+            className="px-4 py-3 bg-dark-700 hover:bg-dark-600 text-gray-200 rounded-lg transition text-sm border border-dark-500"
+            title="Run ONE business end-to-end. No emails sent. Cheapest way to verify keys work."
+          >
+            Test one
+          </button>
         )}
 
         <button

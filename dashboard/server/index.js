@@ -110,6 +110,85 @@ app.post('/api/deploy', async (req, res) => {
   res.json({ success: true, pipelineId: currentPipelineId });
 });
 
+// One-business smoke test — runs the whole pipeline on a single lead so the
+// user can verify real-key setup without committing to a batch. Same path as
+// /api/deploy with maxLeads=1 and email-sending off to avoid spamming anyone
+// on accident.
+app.post('/api/test-run', async (req, res) => {
+  if (pipelineRunning) return res.status(400).json({ error: 'Pipeline already running' });
+
+  const { zipCode = '90210', category = 'restaurant' } = req.body;
+  const db = getDb();
+
+  const run = db.prepare(
+    'INSERT INTO pipeline_runs (zip_codes, categories, max_leads, daily_email_limit, status, started_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+  ).run(JSON.stringify([zipCode]), JSON.stringify([category]), 1, 0, 'running');
+  currentPipelineId = run.lastInsertRowid;
+  pipelineRunning = true;
+
+  broadcast('pipeline_status', { status: 'running', pipelineId: currentPipelineId, kind: 'test_run' });
+
+  await agents.sentinel.start();
+  for (const [name, agent] of Object.entries(agents)) {
+    if (name !== 'sentinel') await agent.start();
+  }
+
+  runPipeline([zipCode], [category], 1, 0)
+    .catch((err) => {
+      console.error('[test-run] failed:', err.message);
+      broadcast('pipeline_error', { error: err.message });
+    })
+    .finally(() => {
+      // test-run always ends after one business — mark done.
+      if (currentPipelineId) {
+        db.prepare('UPDATE pipeline_runs SET status = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?')
+          .run('completed', currentPipelineId);
+      }
+      pipelineRunning = false;
+      currentPipelineId = null;
+      broadcast('pipeline_status', { status: 'stopped', kind: 'test_run' });
+    });
+
+  res.json({ success: true, pipelineId: currentPipelineId });
+});
+
+// SendGrid inbound event webhook. Configure in SendGrid → Mail Settings →
+// Event Webhook → POST to <public-url>/api/webhooks/sendgrid. Events arrive
+// as an array of objects with `event`, `email`, `sg_message_id`, etc.
+app.post('/api/webhooks/sendgrid', (req, res) => {
+  const events = Array.isArray(req.body) ? req.body : [];
+  const db = getDb();
+  for (const ev of events) {
+    try {
+      // Match by `sg_message_id` OR the `to` email as fallback.
+      const row = db
+        .prepare(
+          'SELECT id FROM emails WHERE provider_id = ? OR to_email = ? ORDER BY sent_at DESC LIMIT 1',
+        )
+        .get(ev.sg_message_id, ev.email);
+      if (!row) continue;
+      const updates = { open: 'opened_at = CURRENT_TIMESTAMP',
+                        click: 'clicked_at = CURRENT_TIMESTAMP',
+                        bounce: 'bounced = 1, status = \'bounced\'',
+                        dropped: 'status = \'dropped\'',
+                        unsubscribe: 'unsubscribed = 1',
+                        spamreport: 'status = \'spam\'' };
+      const sql = updates[ev.event];
+      if (!sql) continue;
+      db.prepare(`UPDATE emails SET ${sql} WHERE id = ?`).run(row.id);
+      broadcast('email_event', {
+        event: ev.event,
+        email: ev.email,
+        email_id: row.id,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.warn('[sendgrid webhook] row failed:', err.message);
+    }
+  }
+  res.json({ ok: true, processed: events.length });
+});
+
 // Stop pipeline
 app.post('/api/stop', async (req, res) => {
   if (!pipelineRunning) {
