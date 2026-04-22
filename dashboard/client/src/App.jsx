@@ -1,14 +1,27 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useWebSocket } from './hooks/useWebSocket.js';
 import Dashboard from './components/Dashboard.jsx';
 import Agents from './components/Agents.jsx';
 import Leads from './components/Leads.jsx';
 import ScheduledCalls from './components/ScheduledCalls.jsx';
 import Settings from './components/Settings.jsx';
+import ErrorBoundary from './components/ErrorBoundary.jsx';
+
+const PAGE_TITLES = {
+  dashboard: 'Dashboard · Website Scaler',
+  agents: 'Agents · Website Scaler',
+  leads: 'Leads · Website Scaler',
+  calls: 'Scheduled Calls · Website Scaler',
+  settings: 'Settings · Website Scaler',
+};
 
 export default function App() {
   const [page, setPage] = useState('dashboard');
   const ws = useWebSocket();
+
+  useEffect(() => {
+    document.title = PAGE_TITLES[page] || 'Website Scaler';
+  }, [page]);
 
   return (
     <div className="min-h-screen bg-dark-900">
@@ -75,11 +88,13 @@ export default function App() {
       </nav>
 
       {/* Main Content */}
-      {page === 'dashboard' && <Dashboard ws={ws} />}
-      {page === 'agents' && <Agents ws={ws} />}
-      {page === 'leads' && <Leads />}
-      {page === 'calls' && <ScheduledCalls ws={ws} />}
-      {page === 'settings' && <Settings />}
+      <ErrorBoundary key={page}>
+        {page === 'dashboard' && <Dashboard ws={ws} />}
+        {page === 'agents' && <Agents ws={ws} />}
+        {page === 'leads' && <Leads />}
+        {page === 'calls' && <ScheduledCalls ws={ws} />}
+        {page === 'settings' && <Settings />}
+      </ErrorBoundary>
     </div>
   );
 }

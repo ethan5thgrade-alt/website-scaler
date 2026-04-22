@@ -3,14 +3,17 @@ import { getDb, getSetting, setSetting } from '../database.js';
 
 const router = Router();
 
+// Settings keys that should be masked when returned to clients.
+const SENSITIVE_KEY = (key) =>
+  /api_key$/i.test(key) || /secret$/i.test(key) || /token$/i.test(key);
+
 router.get('/', (req, res) => {
   const db = getDb();
   const rows = db.prepare('SELECT key, value FROM settings').all();
   const settings = {};
   for (const row of rows) {
-    // Mask API keys for security
-    if (row.key.includes('api_key') && row.value) {
-      settings[row.key] = row.value ? '••••' + row.value.slice(-4) : '';
+    if (SENSITIVE_KEY(row.key) && row.value) {
+      settings[row.key] = '••••' + String(row.value).slice(-4);
     } else {
       settings[row.key] = row.value;
     }
