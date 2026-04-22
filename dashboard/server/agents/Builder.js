@@ -1,6 +1,7 @@
 import { BaseAgent } from './BaseAgent.js';
 import { getSetting } from '../database.js';
 import Anthropic from '@anthropic-ai/sdk';
+import { logClaudeUsage } from '../services/cost-tracker.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -143,8 +144,9 @@ export class Builder extends BaseAgent {
       .filter(Boolean)
       .join('\n');
 
+    const model = 'claude-haiku-4-5';
     const response = await client.messages.create({
-      model: 'claude-haiku-4-5',
+      model,
       max_tokens: 400,
       system:
         'You write short, grounded website copy for small local businesses. ' +
@@ -153,6 +155,9 @@ export class Builder extends BaseAgent {
         'Return ONLY valid JSON matching: {"tagline": "5-9 word phrase", "about": "50-90 word paragraph (2-3 sentences)"}',
       messages: [{ role: 'user', content: userInput }],
     });
+
+    // Real-cost accounting — feeds the daily budget cap + dashboard meter.
+    logClaudeUsage({ agent: this.name, model, usage: response.usage });
 
     const textBlock = response.content.find((b) => b.type === 'text');
     const raw = textBlock?.text?.trim() || '';

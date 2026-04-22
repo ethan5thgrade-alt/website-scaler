@@ -1,5 +1,6 @@
 import { BaseAgent } from './BaseAgent.js';
 import { getDb, getSetting } from '../database.js';
+import { logEmailUsage } from '../services/cost-tracker.js';
 
 const EMAIL_TEMPLATES = [
   {
@@ -94,6 +95,7 @@ export class Postman extends BaseAgent {
 
       // SendGrid returns 202 Accepted on success with empty body.
       if (res.status === 202) {
+        logEmailUsage({ agent: this.name });
         this.log(`Sent pitch to ${to} via SendGrid`, 'success');
         return;
       }

@@ -7,6 +7,8 @@ import { getDb } from './database.js';
 import { initWebSocket, broadcast } from './services/websocket.js';
 import apiRoutes from './routes/api.js';
 import settingsRoutes from './routes/settings.js';
+import costRoutes from './routes/cost.js';
+import { isOverBudget } from './services/cost-tracker.js';
 import { Commander } from './agents/Commander.js';
 import { Scout } from './agents/Scout.js';
 import { Scraper } from './agents/Scraper.js';
@@ -40,6 +42,7 @@ initWebSocket(server);
 // Routes
 app.use('/api', apiRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/cost', costRoutes);
 
 // Agent registry
 const agents = {};
@@ -160,12 +163,24 @@ async function runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit) {
 
     for (const category of categories) {
       if (!pipelineRunning || totalProcessed >= maxLeads) break;
+      if (isOverBudget()) {
+        agents.commander.log('Daily budget cap reached — auto-stopping pipeline', 'error');
+        broadcast('pipeline_status', { status: 'stopped', reason: 'over_budget' });
+        pipelineRunning = false;
+        break;
+      }
 
       // Scout finds businesses
       const businesses = await agents.scout.findBusinesses(zip, category, maxLeads - totalProcessed);
 
       for (const biz of businesses) {
         if (!pipelineRunning || totalProcessed >= maxLeads) break;
+        if (isOverBudget()) {
+          agents.commander.log('Budget hit mid-batch — stopping', 'error');
+          broadcast('pipeline_status', { status: 'stopped', reason: 'over_budget' });
+          pipelineRunning = false;
+          break;
+        }
 
         // Scraper enriches data
         const enriched = await agents.scraper.enrichBusiness(biz);
@@ -191,9 +206,8 @@ async function runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit) {
           businessId = result.lastInsertRowid;
         }
 
-        // Track tokens
-        agents.accountant.trackUsage('Scout', 150);
-        agents.accountant.trackUsage('Scraper', 200);
+        // Tokens are now logged automatically by each agent via cost-tracker.
+        // Accountant reads aggregates from DB + emits budget_tick events.
 
         // Commander assigns to a builder (round-robin)
         const builder = builderAgents[builderIndex % 3];
@@ -208,7 +222,7 @@ async function runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit) {
           'INSERT INTO sites (business_id, builder_agent, html_path, preview_url, build_time_ms, design_style, status) VALUES (?, ?, ?, ?, ?, ?, ?)'
         ).run(businessId, builder.name, siteResult.htmlPath, siteResult.previewUrl, siteResult.buildTime, siteResult.designStyle, 'completed');
 
-        agents.accountant.trackUsage(builder.name, 2000);
+        // Builder's Claude call already logged its own token usage.
 
         db.prepare('UPDATE businesses SET status = ? WHERE id = ?').run('site_built', businessId);
 
@@ -230,7 +244,7 @@ async function runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit) {
               'INSERT INTO emails (business_id, site_id, to_email, to_name, subject, body, status, sent_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)'
             ).run(businessId, siteRow.lastInsertRowid, enriched.owner_email, enriched.owner_name, emailResult.subject, emailResult.body, 'sent');
 
-            agents.accountant.trackUsage('Postman', 500);
+            // Email-send cost already logged inside Postman.sendViaApi.
 
             if (currentPipelineId) {
               db.prepare('UPDATE pipeline_runs SET emails_sent = emails_sent + 1 WHERE id = ?').run(currentPipelineId);
