@@ -311,8 +311,13 @@ function initSchema() {
   }
 
   // FTS5 virtual table mirroring `businesses` so the Leads search is O(log n)
-  // on large lead lists instead of an N× LIKE scan.
+  // on large lead lists instead of an N× LIKE scan. Triggers keep it in
+  // sync on insert/update/delete; we also backfill existing rows the first
+  // time the FTS table is created so upgrades don't start with empty search.
   try {
+    const existed = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='businesses_fts'")
+      .get();
     db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS businesses_fts USING fts5(
         name, address, phone, category, content='businesses', content_rowid='id'
@@ -332,6 +337,9 @@ function initSchema() {
         VALUES (new.id, new.name, new.address, new.phone, new.category);
       END;
     `);
+    if (!existed) {
+      db.exec("INSERT INTO businesses_fts(businesses_fts) VALUES('rebuild')");
+    }
   } catch (err) {
     // FTS5 may be unavailable in very old SQLite builds — fall back silently.
     console.warn('[DB] FTS5 init skipped:', err.message);

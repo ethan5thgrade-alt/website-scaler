@@ -63,8 +63,18 @@ app.use('/api/deploy', rateLimit({ max: 3, windowMs: 60_000, name: 'deploy' }));
 app.use('/api/stop', rateLimit({ max: 10, windowMs: 60_000, name: 'stop' }));
 app.use('/api/calendly/webhook', rateLimit({ max: 60, windowMs: 60_000, name: 'calendly' }));
 
-// Serve generated sites
+// Serve generated sites. Anything under /sites/* that isn't a real file
+// returns a clear 404 instead of falling through to the dashboard SPA
+// (which was showing the dashboard shell for broken preview URLs).
 app.use('/sites', express.static(path.join(__dirname, '..', 'generated-sites')));
+app.use('/sites', (req, res) => {
+  res.status(404).type('html').send(
+    '<!doctype html><body style="font-family:sans-serif;max-width:420px;margin:40px auto;text-align:center">' +
+    '<h2>This demo site has moved or expired</h2>' +
+    '<p>If you believe this is an error, reply to the email we sent and we\'ll rebuild it.</p>' +
+    '</body>'
+  );
+});
 
 // Serve frontend in production
 app.use(express.static(path.join(__dirname, '..', 'client', 'dist')));

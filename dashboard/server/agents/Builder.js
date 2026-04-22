@@ -231,7 +231,7 @@ export class Builder extends BaseAgent {
   <meta name="twitter:title" content="${this.escHtml(biz.name)}">
   <meta name="twitter:description" content="${metaDesc}">
   <link rel="canonical" href="${this.escHtml(biz.maps_url || '#')}">
-  <script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
+  <script type="application/ld+json">${this.safeJsonForScript(jsonLd)}</script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -471,6 +471,17 @@ export class Builder extends BaseAgent {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  // JSON.stringify doesn't escape `</` — so a business named with a literal
+  // `</script>` inside would break out of the JSON-LD block. Replace `<`,
+  // `>`, and the U+2028/2029 line separators that break some parsers.
+  safeJsonForScript(obj) {
+    return JSON.stringify(obj)
+      .replace(/</g, '\\u003c')
+      .replace(/>/g, '\\u003e')
+      .replace(/\u2028/g, '\\u2028')
+      .replace(/\u2029/g, '\\u2029');
   }
 
   // Parse hours like "9:00 AM – 6:00 PM" and decide if we're open right now.

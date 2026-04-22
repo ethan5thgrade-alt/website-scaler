@@ -145,23 +145,37 @@ router.get('/businesses', (req, res) => {
   const db = getDb();
   const limit = Math.min(500, parseInt(req.query.limit) || 100);
 
-  const wheres = [];
+  const wheres = ['(b.deleted_at IS NULL)'];
   const params = [];
+  let fromClause = 'FROM businesses b';
+
   if (req.query.q) {
-    wheres.push('(name LIKE ? OR address LIKE ? OR phone LIKE ?)');
-    const like = `%${req.query.q}%`;
-    params.push(like, like, like);
+    // Prefer FTS5 when it's available — it's dramatically faster than LIKE
+    // on large lead lists. The MATCH tokens get quoted so the user can pass
+    // plain text (the FTS5 parser treats `.`/`-` as syntax otherwise).
+    const fts = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='businesses_fts'")
+      .get();
+    if (fts) {
+      fromClause = 'FROM businesses b JOIN businesses_fts f ON f.rowid = b.id';
+      wheres.push('businesses_fts MATCH ?');
+      params.push(`"${String(req.query.q).replace(/"/g, '""')}"*`);
+    } else {
+      wheres.push('(b.name LIKE ? OR b.address LIKE ? OR b.phone LIKE ?)');
+      const like = `%${req.query.q}%`;
+      params.push(like, like, like);
+    }
   }
-  if (req.query.zip) { wheres.push('zip_code = ?'); params.push(req.query.zip); }
-  if (req.query.category) { wheres.push('category = ?'); params.push(req.query.category); }
-  if (req.query.status) { wheres.push('status = ?'); params.push(req.query.status); }
+  if (req.query.zip) { wheres.push('b.zip_code = ?'); params.push(req.query.zip); }
+  if (req.query.category) { wheres.push('b.category = ?'); params.push(req.query.category); }
+  if (req.query.status) { wheres.push('b.status = ?'); params.push(req.query.status); }
 
   const sql = `
-    SELECT id, place_id, name, address, phone, category, rating, review_count,
-           zip_code, status, priority, owner_name, owner_email, created_at
-    FROM businesses
-    ${wheres.length ? 'WHERE ' + wheres.join(' AND ') : ''}
-    ORDER BY priority DESC, created_at DESC
+    SELECT b.id, b.place_id, b.name, b.address, b.phone, b.category, b.rating, b.review_count,
+           b.zip_code, b.status, b.priority, b.owner_name, b.owner_email, b.created_at
+    ${fromClause}
+    WHERE ${wheres.join(' AND ')}
+    ORDER BY b.priority DESC, b.created_at DESC
     LIMIT ?
   `;
   const businesses = db.prepare(sql).all(...params, limit);
