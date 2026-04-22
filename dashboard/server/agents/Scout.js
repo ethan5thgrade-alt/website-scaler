@@ -1,5 +1,5 @@
 import { BaseAgent } from './BaseAgent.js';
-import { getSetting } from '../database.js';
+import { getDb, getSetting } from '../database.js';
 
 // Mock business data for when no API key is configured
 const MOCK_BUSINESSES = [
@@ -17,6 +17,38 @@ const MOCK_BUSINESSES = [
   { place_id: 'mock_12', name: 'Happy Paws Pet Grooming', category: 'pet_service', rating: 4.5, review_count: 121, address: '963 Highland Ave', phone: '(310) 555-0112', latitude: 34.0528, longitude: -118.2442 },
 ];
 
+// Hosts that are social pages or aggregator listings, not real business sites.
+// A listing whose websiteUri points here still qualifies as "no website."
+const NON_WEBSITE_HOSTS = [
+  'facebook.com', 'fb.com', 'm.facebook.com',
+  'instagram.com',
+  'twitter.com', 'x.com',
+  'tiktok.com',
+  'linkedin.com',
+  'yelp.com',
+  'tripadvisor.com',
+  'google.com', 'goo.gl', 'maps.google.com', 'sites.google.com', 'business.site',
+  'linktr.ee', 'beacons.ai', 'bio.link',
+  'youtube.com', 'youtu.be',
+  'nextdoor.com',
+  'opentable.com', 'doordash.com', 'ubereats.com', 'grubhub.com', 'seamless.com',
+  'booksy.com', 'vagaro.com', 'styleseat.com', 'fresha.com',
+  'zocdoc.com', 'healthgrades.com',
+];
+
+// Synonyms so users typing "cafe" still match mock restaurants, etc.
+const CATEGORY_SYNONYMS = {
+  restaurant: ['restaurant', 'cafe', 'bar', 'food', 'meal_takeaway'],
+  bakery: ['bakery'],
+  salon: ['salon', 'beauty_salon', 'hair_care', 'nail_salon', 'spa', 'barber'],
+  gym: ['gym', 'yoga', 'fitness'],
+  dentist: ['dentist', 'doctor', 'medical'],
+  lawyer: ['lawyer', 'attorney', 'legal'],
+  florist: ['florist', 'flower'],
+  auto_repair: ['auto_repair', 'car_repair', 'mechanic'],
+  pet_service: ['pet_service', 'pet_store', 'pet_grooming', 'veterinary'],
+};
+
 export class Scout extends BaseAgent {
   constructor(broadcast) {
     super('Scout', broadcast);
@@ -25,9 +57,10 @@ export class Scout extends BaseAgent {
   async findBusinesses(zipCode, category, limit = 10) {
     this.heartbeat();
     const apiKey = getSetting('google_maps_api_key');
+    const seen = this.loadSeenPlaceIds();
 
     if (apiKey) {
-      return this.findBusinessesFromApi(zipCode, category, limit, apiKey);
+      return this.findBusinessesFromApi(zipCode, category, limit, apiKey, seen);
     }
 
     // Mock mode
@@ -35,7 +68,8 @@ export class Scout extends BaseAgent {
     await this.simulateDelay(800, 2000);
 
     const filtered = MOCK_BUSINESSES
-      .filter((b) => !category || b.category === category || category === 'all')
+      .filter((b) => this.categoryMatches(category, b.category))
+      .filter((b) => !seen.has(`${b.place_id}_${zipCode}`))
       .slice(0, limit)
       .map((b) => ({
         ...b,
@@ -48,10 +82,10 @@ export class Scout extends BaseAgent {
     return filtered;
   }
 
-  async findBusinessesFromApi(zipCode, category, limit, apiKey) {
+  async findBusinessesFromApi(zipCode, category, limit, apiKey, seen) {
     // Places API (New) v1 Text Search. Field mask keeps cost minimal — we only
     // pay for fields we request. `websiteUri` is how we filter: if the listing
-    // has a website, we skip it (that's our qualifier — they don't need us).
+    // has a real website, we skip it (that's our qualifier — they don't need us).
     const query = `${category === 'all' ? 'businesses' : category} in ${zipCode}`;
     const fieldMask = [
       'places.id',
@@ -70,6 +104,9 @@ export class Scout extends BaseAgent {
     const qualified = [];
     let pageToken;
     let requestsMade = 0;
+    let skippedHasWebsite = 0;
+    let skippedCategory = 0;
+    let skippedDupe = 0;
 
     try {
       do {
@@ -100,11 +137,16 @@ export class Scout extends BaseAgent {
         requestsMade++;
 
         for (const p of data.places || []) {
-          if (p.websiteUri) continue; // already has a site — skip
+          if (this.hasRealWebsite(p.websiteUri)) { skippedHasWebsite++; continue; }
+          if (seen.has(p.id)) { skippedDupe++; continue; }
+
+          const inferred = this.inferCategory(p.types);
+          if (!this.categoryMatches(category, inferred)) { skippedCategory++; continue; }
+
           qualified.push({
             place_id: p.id,
             name: p.displayName?.text || '',
-            category: category || this.inferCategory(p.types),
+            category: category && category !== 'all' ? category : inferred,
             rating: p.rating,
             review_count: p.userRatingCount,
             address: p.formattedAddress || '',
@@ -113,6 +155,7 @@ export class Scout extends BaseAgent {
             longitude: p.location?.longitude,
             maps_url: p.googleMapsUri,
           });
+          seen.add(p.id);
           if (qualified.length >= limit) break;
         }
 
@@ -120,7 +163,9 @@ export class Scout extends BaseAgent {
       } while (pageToken && qualified.length < limit && requestsMade < 3);
 
       this.log(
-        `Found ${qualified.length} businesses without websites in ${zipCode} (${requestsMade} API calls)`,
+        `Found ${qualified.length} businesses without websites in ${zipCode} ` +
+          `(${requestsMade} API calls; skipped ${skippedHasWebsite} with site, ` +
+          `${skippedCategory} off-category, ${skippedDupe} dupes)`,
         qualified.length > 0 ? 'success' : 'warning',
       );
       this.completeTask();
@@ -128,6 +173,35 @@ export class Scout extends BaseAgent {
     } catch (err) {
       this.logIssue(`Scout API call failed: ${err.message}`, 'error');
       return [];
+    }
+  }
+
+  // Treat empty, social, and aggregator URLs as "no real website."
+  hasRealWebsite(url) {
+    if (!url) return false;
+    let host;
+    try {
+      host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    } catch {
+      return false;
+    }
+    return !NON_WEBSITE_HOSTS.some((bad) => host === bad || host.endsWith(`.${bad}`));
+  }
+
+  categoryMatches(requested, actual) {
+    if (!requested || requested === 'all') return true;
+    const synonyms = CATEGORY_SYNONYMS[requested];
+    if (synonyms) return synonyms.includes(actual);
+    return actual === requested;
+  }
+
+  // Place IDs already in our DB — skip them so Scraper doesn't re-fetch.
+  loadSeenPlaceIds() {
+    try {
+      const rows = getDb().prepare('SELECT place_id FROM businesses WHERE place_id IS NOT NULL').all();
+      return new Set(rows.map((r) => r.place_id));
+    } catch {
+      return new Set();
     }
   }
 
