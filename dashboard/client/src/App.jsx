@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useWebSocket } from './hooks/useWebSocket.js';
 import Dashboard from './components/Dashboard.jsx';
 import Settings from './components/Settings.jsx';
+import SiteGallery from './components/SiteGallery.jsx';
 
 export default function App() {
   const [page, setPage] = useState('dashboard');
@@ -62,6 +63,14 @@ export default function App() {
             Dashboard
           </button>
           <button
+            onClick={() => setPage('sites')}
+            className={`px-3 py-1.5 rounded text-sm transition ${
+              page === 'sites' ? 'bg-dark-600 text-white' : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            Sites
+          </button>
+          <button
             onClick={() => setPage('settings')}
             className={`px-3 py-1.5 rounded text-sm transition ${
               page === 'settings' ? 'bg-dark-600 text-white' : 'text-gray-400 hover:text-white'
@@ -109,6 +118,7 @@ export default function App() {
 
       {/* Main Content */}
       {page === 'dashboard' && <Dashboard ws={ws} />}
+      {page === 'sites' && <SiteGallery />}
       {page === 'settings' && <Settings />}
     </div>
   );
