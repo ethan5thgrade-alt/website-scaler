@@ -1,0 +1,148 @@
+import { Router } from 'express';
+import { getDb } from '../database.js';
+
+const router = Router();
+
+// Dashboard stats
+router.get('/stats', (req, res) => {
+  const db = getDb();
+  const sitesBuilt = db.prepare('SELECT COUNT(*) as count FROM sites WHERE status = ?').get('completed');
+  const emailsSent = db.prepare('SELECT COUNT(*) as count FROM emails WHERE status = ?').get('sent');
+  const emailsDelivered = db.prepare('SELECT COUNT(*) as count FROM emails WHERE status IN (?, ?, ?)').get('sent', 'opened', 'clicked');
+  const emailsOpened = db.prepare('SELECT COUNT(*) as count FROM emails WHERE opened_at IS NOT NULL').get();
+  const emailsReplied = db.prepare('SELECT COUNT(*) as count FROM emails WHERE replied_at IS NOT NULL').get();
+  const salesTotal = db.prepare('SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as revenue FROM sales').get();
+  const activePipelines = db.prepare('SELECT COUNT(*) as count FROM pipeline_runs WHERE status = ?').get('running');
+  const todayTokens = db.prepare(
+    "SELECT COALESCE(SUM(tokens_used), 0) as total FROM token_usage WHERE date(created_at) = date('now')"
+  ).get();
+  const buildsPerDay = db.prepare(
+    "SELECT date(created_at) as day, COUNT(*) as count FROM sites WHERE status = 'completed' GROUP BY date(created_at) ORDER BY day DESC LIMIT 7"
+  ).all();
+
+  res.json({
+    sitesBuilt: sitesBuilt.count,
+    emailsSent: emailsSent.count,
+    emailsDelivered: emailsDelivered.count,
+    emailsOpened: emailsOpened.count,
+    emailsReplied: emailsReplied.count,
+    salesCount: salesTotal.count,
+    revenue: salesTotal.revenue,
+    activePipelines: activePipelines.count,
+    tokensToday: todayTokens.total,
+    buildsPerDay,
+  });
+});
+
+// Activity feed
+router.get('/activity', (req, res) => {
+  const db = getDb();
+  const limit = parseInt(req.query.limit) || 50;
+  const logs = db.prepare(
+    'SELECT * FROM agent_logs ORDER BY created_at DESC LIMIT ?'
+  ).all(limit);
+  res.json(logs);
+});
+
+// Issues
+router.get('/issues', (req, res) => {
+  const db = getDb();
+  const active = db.prepare('SELECT * FROM issues WHERE resolved = 0 ORDER BY created_at DESC').all();
+  const resolved = db.prepare('SELECT * FROM issues WHERE resolved = 1 ORDER BY resolved_at DESC LIMIT 20').all();
+  res.json({ active, resolved });
+});
+
+router.post('/issues/:id/retry', (req, res) => {
+  const db = getDb();
+  db.prepare('UPDATE issues SET resolved = 1, resolved_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+// Sales
+router.get('/sales', (req, res) => {
+  const db = getDb();
+  const sales = db.prepare('SELECT * FROM sales ORDER BY claimed_at DESC').all();
+  const total = db.prepare('SELECT COALESCE(SUM(amount), 0) as revenue FROM sales').get();
+  res.json({ sales, totalRevenue: total.revenue });
+});
+
+// Simulate a sale (for testing)
+router.post('/sales/simulate', (req, res) => {
+  const db = getDb();
+  const names = ['Mama Rosa Bakery', 'Joe\'s Auto Shop', 'Sunny Nails Salon', 'Peak Fitness Gym', 'Golden Wok', 'Dr. Smith Dental'];
+  const locations = ['Beverly Hills, CA', 'Santa Monica, CA', 'Pasadena, CA', 'Malibu, CA'];
+  const builders = ['Builder-Alpha', 'Builder-Beta', 'Builder-Gamma'];
+
+  const biz = db.prepare(
+    'INSERT INTO businesses (name, address, zip_code, category, status, place_id) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(
+    names[Math.floor(Math.random() * names.length)],
+    locations[Math.floor(Math.random() * locations.length)],
+    '90210',
+    'restaurant',
+    'completed',
+    'sim_' + Date.now()
+  );
+
+  const site = db.prepare(
+    'INSERT INTO sites (business_id, builder_agent, status, build_time_ms) VALUES (?, ?, ?, ?)'
+  ).run(biz.lastInsertRowid, builders[Math.floor(Math.random() * builders.length)], 'completed', Math.floor(Math.random() * 5000) + 1000);
+
+  const business = db.prepare('SELECT * FROM businesses WHERE id = ?').get(biz.lastInsertRowid);
+
+  db.prepare(
+    'INSERT INTO sales (business_id, site_id, amount, business_name, location, builder_agent) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(biz.lastInsertRowid, site.lastInsertRowid, 50, business.name, business.address, builders[Math.floor(Math.random() * builders.length)]);
+
+  res.json({ success: true });
+});
+
+// Agent statuses
+router.get('/agents', (req, res) => {
+  const db = getDb();
+  const agents = db.prepare('SELECT * FROM agent_status ORDER BY agent_name').all();
+  res.json(agents);
+});
+
+// Token usage
+router.get('/tokens', (req, res) => {
+  const db = getDb();
+  const today = db.prepare(
+    "SELECT agent_name, SUM(tokens_used) as total, SUM(cost_estimate) as cost FROM token_usage WHERE date(created_at) = date('now') GROUP BY agent_name"
+  ).all();
+  const total = db.prepare(
+    "SELECT COALESCE(SUM(tokens_used), 0) as total, COALESCE(SUM(cost_estimate), 0) as cost FROM token_usage WHERE date(created_at) = date('now')"
+  ).get();
+  const hourly = db.prepare(
+    "SELECT strftime('%H', created_at) as hour, SUM(tokens_used) as total FROM token_usage WHERE date(created_at) = date('now') GROUP BY hour ORDER BY hour"
+  ).all();
+  res.json({ byAgent: today, total, hourly });
+});
+
+// Uptime / security
+router.get('/uptime', (req, res) => {
+  const db = getDb();
+  const logs = db.prepare('SELECT * FROM uptime_logs ORDER BY created_at DESC LIMIT 100').all();
+  const restarts = db.prepare(
+    "SELECT * FROM uptime_logs WHERE event_type = 'restart' ORDER BY created_at DESC LIMIT 20"
+  ).all();
+  const agents = db.prepare('SELECT agent_name, status, last_heartbeat, restart_count FROM agent_status').all();
+  res.json({ logs, restarts, agents });
+});
+
+// Pipeline management
+router.get('/pipelines', (req, res) => {
+  const db = getDb();
+  const pipelines = db.prepare('SELECT * FROM pipeline_runs ORDER BY created_at DESC LIMIT 20').all();
+  res.json(pipelines);
+});
+
+// Businesses
+router.get('/businesses', (req, res) => {
+  const db = getDb();
+  const limit = parseInt(req.query.limit) || 50;
+  const businesses = db.prepare('SELECT * FROM businesses ORDER BY created_at DESC LIMIT ?').all(limit);
+  res.json(businesses);
+});
+
+export default router;

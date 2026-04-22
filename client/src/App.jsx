@@ -1,0 +1,55 @@
+import { useState } from 'react';
+import { useWebSocket } from './hooks/useWebSocket.js';
+import Dashboard from './components/Dashboard.jsx';
+import Settings from './components/Settings.jsx';
+
+export default function App() {
+  const [page, setPage] = useState('dashboard');
+  const ws = useWebSocket();
+
+  return (
+    <div className="min-h-screen bg-dark-900">
+      {/* Top Nav */}
+      <nav className="bg-dark-800 border-b border-dark-500 px-6 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="text-xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+            WEBSITE SCALER
+          </div>
+          <span className="text-xs text-gray-500 border border-dark-500 px-2 py-0.5 rounded">
+            COMMAND CENTER
+          </span>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <button
+            onClick={() => setPage('dashboard')}
+            className={`px-3 py-1.5 rounded text-sm transition ${
+              page === 'dashboard' ? 'bg-dark-600 text-white' : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            Dashboard
+          </button>
+          <button
+            onClick={() => setPage('settings')}
+            className={`px-3 py-1.5 rounded text-sm transition ${
+              page === 'settings' ? 'bg-dark-600 text-white' : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            Settings
+          </button>
+
+          <div className="flex items-center gap-2 ml-4">
+            <div className={`w-2 h-2 rounded-full ${ws.connected ? 'bg-green-500 animate-pulse-green' : 'bg-red-500'}`} />
+            <span className="text-xs text-gray-400">
+              {ws.connected ? 'LIVE' : 'OFFLINE'}
+            </span>
+          </div>
+        </div>
+      </nav>
+
+      {/* Main Content */}
+      {page === 'dashboard' && <Dashboard ws={ws} />}
+      {page === 'settings' && <Settings />}
+    </div>
+  );
+}
