@@ -2,6 +2,7 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import { getDb, getSetting } from '../database.js';
 import { buildDemoForBusiness } from '../services/builderDispatch.js';
+import { verifyCalendly, verifySendGrid } from '../services/webhookSig.js';
 
 const router = Router();
 
@@ -280,6 +281,20 @@ router.get('/scheduled-calls', (req, res) => {
 // the "questions and answers" section; we use that to match to a lead.
 router.post('/calendly/webhook', async (req, res) => {
   const db = getDb();
+
+  // Signature verification — skipped when no secret configured (dev).
+  const secret = getSetting('calendly_webhook_secret');
+  if (secret) {
+    const verdict = verifyCalendly(
+      req.rawBody || '',
+      req.headers['calendly-webhook-signature'],
+      secret,
+    );
+    if (!verdict.ok && !verdict.skipped) {
+      return res.status(401).json({ error: 'invalid_signature', reason: verdict.reason });
+    }
+  }
+
   const event = req.body?.event;
   const payload = req.body?.payload;
 
@@ -392,6 +407,19 @@ router.post('/unsubscribe', (req, res) => {
 // SendGrid event webhook (bounces, spam reports, unsubscribes).
 // Array of events per docs: https://docs.sendgrid.com/for-developers/tracking-events/event
 router.post('/sendgrid/events', (req, res) => {
+  const pubKey = getSetting('sendgrid_webhook_public_key');
+  if (pubKey) {
+    const verdict = verifySendGrid(
+      req.rawBody || '',
+      req.headers['x-twilio-email-event-webhook-signature'],
+      req.headers['x-twilio-email-event-webhook-timestamp'],
+      pubKey,
+    );
+    if (!verdict.ok && !verdict.skipped) {
+      return res.status(401).json({ error: 'invalid_signature', reason: verdict.reason });
+    }
+  }
+
   const events = Array.isArray(req.body) ? req.body : [];
   const db = getDb();
   const insertSuppress = db.prepare(
@@ -465,6 +493,94 @@ router.post('/scheduled-calls/:id/build-demo', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Update notes / outcome on a scheduled call.
+router.patch('/scheduled-calls/:id', (req, res) => {
+  const db = getDb();
+  const { notes, outcome, status } = req.body || {};
+  const call = db.prepare('SELECT * FROM scheduled_calls WHERE id = ?').get(req.params.id);
+  if (!call) return res.status(404).json({ error: 'Call not found' });
+
+  const updates = [];
+  const vals = [];
+  if (typeof notes === 'string') { updates.push('notes = ?'); vals.push(notes); }
+  if (typeof outcome === 'string' && /^(won|lost|follow_up|no_show)?$/.test(outcome)) {
+    updates.push('outcome = ?'); vals.push(outcome);
+  }
+  if (typeof status === 'string' && /^(scheduled|demo_built|demo_failed|completed|cancelled|no_show)$/.test(status)) {
+    updates.push('status = ?'); vals.push(status);
+  }
+  if (!updates.length) return res.json({ ok: true, unchanged: true });
+
+  vals.push(call.id);
+  db.prepare(`UPDATE scheduled_calls SET ${updates.join(', ')} WHERE id = ?`).run(...vals);
+
+  db.prepare(
+    'INSERT INTO audit_log (actor, action, target_type, target_id, request_id, metadata) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run('operator', 'scheduled_call.update', 'scheduled_call', String(call.id), req.id || null, JSON.stringify({ notes: notes?.slice(0, 200), outcome, status }));
+
+  res.json({ ok: true });
+});
+
+// ICS export for a single call so the operator can add it to their own
+// calendar without relying on Calendly's invite pipeline.
+router.get('/scheduled-calls/:id/ics', (req, res) => {
+  const db = getDb();
+  const call = db.prepare(`
+    SELECT sc.*, b.name as business_name, b.address, b.phone
+    FROM scheduled_calls sc LEFT JOIN businesses b ON b.id = sc.business_id
+    WHERE sc.id = ?
+  `).get(req.params.id);
+  if (!call) return res.status(404).json({ error: 'Call not found' });
+
+  const start = toICS(call.scheduled_at);
+  const end = toICS(new Date(new Date(call.scheduled_at).getTime() + 15 * 60_000).toISOString());
+  const uid = `call-${call.id}@websitescaler`;
+  const summary = `Website demo call — ${call.business_name || 'Prospect'}`;
+  const description = [
+    call.business_name ? `Business: ${call.business_name}` : '',
+    call.address ? `Address: ${call.address}` : '',
+    call.phone ? `Phone: ${call.phone}` : '',
+    call.booker_name ? `Booked by: ${call.booker_name}` : '',
+    call.booker_email ? `Email: ${call.booker_email}` : '',
+  ].filter(Boolean).join('\\n');
+
+  const body = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Website Scaler//Scheduled Calls//EN',
+    'BEGIN:VEVENT',
+    `UID:${uid}`,
+    `DTSTAMP:${toICS(new Date().toISOString())}`,
+    `DTSTART:${start}`,
+    `DTEND:${end}`,
+    `SUMMARY:${summary}`,
+    `DESCRIPTION:${description}`,
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].join('\r\n');
+
+  res.set({
+    'Content-Type': 'text/calendar; charset=utf-8',
+    'Content-Disposition': `attachment; filename="call-${call.id}.ics"`,
+  });
+  res.send(body);
+});
+
+function toICS(iso) {
+  if (!iso) return '';
+  return new Date(iso).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+}
+
+// Audit log — read-only for now, ordered newest first, paginated.
+router.get('/audit-log', (req, res) => {
+  const limit = Math.min(500, parseInt(req.query.limit) || 100);
+  const offset = Math.max(0, parseInt(req.query.offset) || 0);
+  const rows = getDb()
+    .prepare('SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ? OFFSET ?')
+    .all(limit, offset);
+  res.json({ rows, limit, offset });
 });
 
 export default router;

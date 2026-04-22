@@ -9,6 +9,14 @@ const STATUS_STYLES = {
   no_show:      { label: 'No show',      color: 'bg-amber-500/20 text-amber-300 border-amber-500/30' },
 };
 
+const OUTCOMES = [
+  { key: '', label: '—' },
+  { key: 'won', label: 'Won' },
+  { key: 'lost', label: 'Lost' },
+  { key: 'follow_up', label: 'Follow-up' },
+  { key: 'no_show', label: 'No-show' },
+];
+
 function formatDateTime(iso) {
   if (!iso) return 'TBD';
   const d = new Date(iso);
@@ -78,6 +86,15 @@ export default function ScheduledCalls({ ws }) {
     } finally {
       setBuildingId(null);
     }
+  }
+
+  async function patchCall(id, patch) {
+    await fetch(`/api/scheduled-calls/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    fetchCalls();
   }
 
   if (loading) {
@@ -170,7 +187,34 @@ export default function ScheduledCalls({ ws }) {
                       {buildingId === call.id ? 'Rebuilding…' : 'Rebuild'}
                     </button>
                   )}
+                  <a
+                    href={`/api/scheduled-calls/${call.id}/ics`}
+                    className="text-xs text-gray-500 hover:text-gray-300"
+                  >
+                    Add to calendar
+                  </a>
                 </div>
+              </div>
+
+              <div className="mt-3 pt-3 border-t border-dark-700 flex flex-wrap gap-3 items-center">
+                <label className="text-xs text-gray-500 flex items-center gap-2">
+                  Outcome
+                  <select
+                    value={call.outcome || ''}
+                    onChange={(e) => patchCall(call.id, { outcome: e.target.value })}
+                    className="bg-dark-900 border border-dark-500 rounded px-2 py-1 text-xs text-white"
+                  >
+                    {OUTCOMES.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+                  </select>
+                </label>
+                <input
+                  defaultValue={call.notes || ''}
+                  onBlur={(e) => {
+                    if (e.target.value !== (call.notes || '')) patchCall(call.id, { notes: e.target.value });
+                  }}
+                  placeholder="Notes (save on blur)…"
+                  className="flex-1 min-w-[200px] bg-dark-900 border border-dark-500 rounded px-2 py-1 text-xs text-white placeholder-gray-500"
+                />
               </div>
             </div>
           );

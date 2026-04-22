@@ -3,7 +3,7 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer } from 'http';
-import { getDb } from './database.js';
+import { getDb, startWalCheckpoint, archiveOldLogs } from './database.js';
 import { initWebSocket, broadcast } from './services/websocket.js';
 import apiRoutes from './routes/api.js';
 import settingsRoutes from './routes/settings.js';
@@ -37,7 +37,14 @@ app.set('trust proxy', 1);
 app.use(requestId());
 app.use(securityHeaders());
 app.use(cors({ origin: corsOriginList(), credentials: true }));
-app.use(express.json({ limit: '1mb' }));
+// Preserve the raw request body on every JSON request so webhook handlers
+// can verify signatures. The verify callback is synchronous and runs before
+// parsing, so req.rawBody is populated by the time the route handler sees
+// the parsed `req.body`.
+app.use(express.json({
+  limit: '1mb',
+  verify: (req, res, buf) => { req.rawBody = buf ? buf.toString('utf8') : ''; },
+}));
 app.use(accessLog());
 
 // Health endpoints — cheap checks used by uptime monitors + load balancers.
@@ -64,6 +71,14 @@ app.use(express.static(path.join(__dirname, '..', 'client', 'dist')));
 
 // Init database
 getDb();
+
+// Cron-lite: periodic WAL checkpoint and nightly log archive.
+startWalCheckpoint(10 * 60_000);
+// First archive at +6h from boot, then every 24h.
+setTimeout(() => {
+  archiveOldLogs(30);
+  setInterval(() => archiveOldLogs(30), 24 * 3600_000).unref();
+}, 6 * 3600_000).unref();
 
 // Init WebSocket
 initWebSocket(server);
@@ -105,7 +120,7 @@ app.post('/api/deploy', async (req, res) => {
     return res.status(400).json({ error: 'Pipeline already running' });
   }
 
-  const { zipCodes = ['90210'], categories = ['restaurant'], maxLeads = 20, dailyEmailLimit = 50 } = req.body;
+  const { zipCodes = ['90210'], categories = ['restaurant'], maxLeads = 20, dailyEmailLimit = 50, dryRun = false } = req.body;
 
   const db = getDb();
 
@@ -138,7 +153,7 @@ app.post('/api/deploy', async (req, res) => {
   broadcast('deploy', { status: 'all_agents_online' });
 
   // Start the pipeline
-  runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit).catch((err) => {
+  runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit, { dryRun }).catch((err) => {
     console.error('[Pipeline] Error:', err.message);
     broadcast('pipeline_error', { error: err.message });
   });
@@ -188,7 +203,10 @@ app.get('/api/pipeline/status', (req, res) => {
   });
 });
 
-async function runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit) {
+async function runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit, { dryRun = false } = {}) {
+  if (dryRun) {
+    agents.commander.log('DRY RUN — no emails will be sent, no DB writes for leads', 'info');
+  }
   const db = getDb();
   const builderAgents = [agents.builderAlpha, agents.builderBeta, agents.builderGamma];
   const concurrency = builderAgents.length;
@@ -201,6 +219,16 @@ async function runPipeline(zipCodes, categories, maxLeads, dailyEmailLimit) {
   async function processLead(biz) {
     // Scraper enriches data
     const enriched = await agents.scraper.enrichBusiness(biz);
+
+    if (dryRun) {
+      broadcast('dry_run_lead', {
+        name: enriched.name, category: enriched.category,
+        rating: enriched.rating, reviews: enriched.review_count,
+        owner_email: enriched.owner_email, phone: enriched.phone,
+      });
+      totalProcessed++;
+      return;
+    }
 
     // Save to database
     const existing = db.prepare('SELECT id FROM businesses WHERE place_id = ?').get(enriched.place_id);

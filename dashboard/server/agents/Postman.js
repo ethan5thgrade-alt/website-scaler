@@ -39,6 +39,17 @@ export class Postman extends BaseAgent {
       return { suppressed: true, to: business.owner_email };
     }
 
+    // Generic role-account guard (contact@, info@, support@ ...). These
+    // rarely reach the owner and hurt sender reputation; skip by default,
+    // configurable via `suppress_generic_addresses` setting.
+    if (business.owner_email && getSetting('suppress_generic_addresses') !== '0') {
+      const local = String(business.owner_email).split('@')[0].toLowerCase();
+      if (/^(contact|info|hello|support|admin|office|sales|noreply|no-reply|team)$/.test(local)) {
+        this.log(`Skipping ${business.owner_email} — generic role account`, 'info');
+        return { skipped: 'generic', to: business.owner_email };
+      }
+    }
+
     // Rate limiting
     const maxPerHour = parseInt(getSetting('max_emails_per_hour')) || 50;
     if (Date.now() - this.hourResetTime > 3600000) {
@@ -54,7 +65,7 @@ export class Postman extends BaseAgent {
     // the call is booked (via the Calendly webhook), not up front.
     const calendlyLink = previewUrl || getSetting('calendly_link') || '';
     const template = EMAIL_TEMPLATES[Math.floor(Math.random() * EMAIL_TEMPLATES.length)];
-    const subject = template.subject(business.name);
+    const subject = this.normalizeSubject(template.subject(business.name));
     const bodyCore = template.body(business, calendlyLink);
 
     // CAN-SPAM footer: unsubscribe link + physical address are required.
@@ -163,6 +174,19 @@ export class Postman extends BaseAgent {
     } catch (err) {
       this.logIssue(`Email send failed for ${to}: ${err.message}`, 'error');
     }
+  }
+
+  // Subject quality guards — ALL-CAPS and overlong subjects correlate with
+  // spam classification. Cap at 60 chars, and detitle any ALL-CAPS run.
+  normalizeSubject(subject) {
+    let s = String(subject || '').trim();
+    // Drop trailing exclamation / question-mark pile-ups (!!!, ???).
+    s = s.replace(/([!?])\1+/g, '$1');
+    // De-shout any run of 4+ uppercase letters.
+    s = s.replace(/[A-Z]{4,}/g, (run) => run.charAt(0) + run.slice(1).toLowerCase());
+    // Clamp length for deliverability (Gmail truncates mid-word past ~70).
+    if (s.length > 60) s = s.slice(0, 57).replace(/\s+\S*$/, '') + '…';
+    return s;
   }
 
   // Minimal HTML renderer for the plaintext body. Escapes, then converts

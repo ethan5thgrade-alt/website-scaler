@@ -215,6 +215,7 @@ export class Builder extends BaseAgent {
     const ogImage = heroImg ? this.escHtml(heroImg) : '';
 
     return `<!DOCTYPE html>
+<!-- built-at: ${new Date().toISOString()} | business: ${biz.place_id || biz.id} -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -229,6 +230,7 @@ export class Builder extends BaseAgent {
   <meta name="twitter:card" content="${ogImage ? 'summary_large_image' : 'summary'}">
   <meta name="twitter:title" content="${this.escHtml(biz.name)}">
   <meta name="twitter:description" content="${metaDesc}">
+  <link rel="canonical" href="${this.escHtml(biz.maps_url || '#')}">
   <script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -326,6 +328,19 @@ export class Builder extends BaseAgent {
       font-weight: 700;
       margin: 4px;
     }
+    .gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+      margin-top: 20px;
+    }
+    .gallery img {
+      width: 100%;
+      height: 200px;
+      object-fit: cover;
+      border-radius: 10px;
+      display: block;
+    }
     .map-section { background: ${isDark ? '#0F3460' : '#f9fafb'}; }
     .map-container {
       border-radius: 10px;
@@ -396,6 +411,16 @@ export class Builder extends BaseAgent {
           return `<tr${isToday ? ' class="today"' : ''}><td>${this.escHtml(day)}</td><td>${this.escHtml(time)}</td></tr>`;
         }).join('\n        ')}
       </table>
+    </div>
+  </section>` : ''}
+
+  ${Array.isArray(biz.photos) && biz.photos.length > 0 ? `
+  <section>
+    <div class="container">
+      <h2>Gallery</h2>
+      <div class="gallery">
+        ${biz.photos.slice(0, 6).map((src, i) => `<img src="${this.escHtml(src)}" alt="${this.escHtml(biz.name)} photo ${i + 1}" loading="lazy" decoding="async">`).join('\n        ')}
+      </div>
     </div>
   </section>` : ''}
 

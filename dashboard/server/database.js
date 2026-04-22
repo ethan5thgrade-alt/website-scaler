@@ -12,9 +12,44 @@ export function getDb() {
     db = new Database(DB_PATH);
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
+    // Block-waiting up to 5s on SQLITE_BUSY beats surfacing transient
+    // contention to callers. WAL mode mostly avoids writer starvation,
+    // but the periodic checkpoint + vacuum jobs can still collide.
+    db.pragma('busy_timeout = 5000');
+    db.pragma('synchronous = NORMAL');
     initSchema();
   }
   return db;
+}
+
+// Periodic WAL checkpoint — caps the -wal file which otherwise grows
+// unbounded on long-running processes. TRUNCATE is the strongest mode:
+// it flushes the WAL and then resets the file to zero bytes.
+export function startWalCheckpoint(intervalMs = 10 * 60_000) {
+  return setInterval(() => {
+    try {
+      getDb().pragma('wal_checkpoint(TRUNCATE)');
+    } catch (err) {
+      console.warn('[DB] wal_checkpoint failed:', err.message);
+    }
+  }, intervalMs).unref();
+}
+
+// Archive agent_logs older than `days` into a sibling table and delete
+// the originals. Keeps the primary table small for snappy dashboard reads.
+export function archiveOldLogs(days = 30) {
+  const d = getDb();
+  try {
+    d.exec(`CREATE TABLE IF NOT EXISTS agent_logs_archive AS SELECT * FROM agent_logs WHERE 0`);
+    const cutoff = `datetime('now', '-${Number(days) | 0} days')`;
+    d.exec(`
+      INSERT INTO agent_logs_archive
+        SELECT * FROM agent_logs WHERE created_at < ${cutoff};
+      DELETE FROM agent_logs WHERE created_at < ${cutoff};
+    `);
+  } catch (err) {
+    console.warn('[DB] archive failed:', err.message);
+  }
 }
 
 function initSchema() {
@@ -253,6 +288,55 @@ function initSchema() {
     }
   }
 
+  // Soft-delete groundwork on businesses so we can "undelete" for 30d
+  // without destroying data outright.
+  {
+    const cols = db.prepare('PRAGMA table_info(businesses)').all();
+    if (!cols.some((c) => c.name === 'deleted_at')) {
+      db.exec('ALTER TABLE businesses ADD COLUMN deleted_at DATETIME');
+    }
+    if (!cols.some((c) => c.name === 'notes')) {
+      db.exec('ALTER TABLE businesses ADD COLUMN notes TEXT');
+    }
+  }
+  // Notes + outcome tracking on scheduled_calls.
+  {
+    const cols = db.prepare('PRAGMA table_info(scheduled_calls)').all();
+    if (!cols.some((c) => c.name === 'notes')) {
+      db.exec('ALTER TABLE scheduled_calls ADD COLUMN notes TEXT');
+    }
+    if (!cols.some((c) => c.name === 'outcome')) {
+      db.exec('ALTER TABLE scheduled_calls ADD COLUMN outcome TEXT');
+    }
+  }
+
+  // FTS5 virtual table mirroring `businesses` so the Leads search is O(log n)
+  // on large lead lists instead of an N× LIKE scan.
+  try {
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS businesses_fts USING fts5(
+        name, address, phone, category, content='businesses', content_rowid='id'
+      );
+      CREATE TRIGGER IF NOT EXISTS businesses_ai AFTER INSERT ON businesses BEGIN
+        INSERT INTO businesses_fts(rowid, name, address, phone, category)
+        VALUES (new.id, new.name, new.address, new.phone, new.category);
+      END;
+      CREATE TRIGGER IF NOT EXISTS businesses_ad AFTER DELETE ON businesses BEGIN
+        INSERT INTO businesses_fts(businesses_fts, rowid, name, address, phone, category)
+        VALUES('delete', old.id, old.name, old.address, old.phone, old.category);
+      END;
+      CREATE TRIGGER IF NOT EXISTS businesses_au AFTER UPDATE ON businesses BEGIN
+        INSERT INTO businesses_fts(businesses_fts, rowid, name, address, phone, category)
+        VALUES('delete', old.id, old.name, old.address, old.phone, old.category);
+        INSERT INTO businesses_fts(rowid, name, address, phone, category)
+        VALUES (new.id, new.name, new.address, new.phone, new.category);
+      END;
+    `);
+  } catch (err) {
+    // FTS5 may be unavailable in very old SQLite builds — fall back silently.
+    console.warn('[DB] FTS5 init skipped:', err.message);
+  }
+
   // Insert default settings if not present
   const insertSetting = db.prepare(
     'INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)'
@@ -274,9 +358,12 @@ function initSchema() {
     price_sample_size: '0',
     calendly_link: '',
     calendly_webhook_secret: '',
+    sendgrid_webhook_public_key: '',
     sender_physical_address: '',
     unsubscribe_base_url: '',
     min_review_count: '5',
+    scout_negative_keywords: '',
+    suppress_generic_addresses: '1',
   };
   for (const [key, value] of Object.entries(defaults)) {
     insertSetting.run(key, value);

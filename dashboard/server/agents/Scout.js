@@ -104,6 +104,8 @@ export class Scout extends BaseAgent {
 
     const minReviews = parseInt(getSetting('min_review_count')) || 0;
     const seenPhones = this.loadSeenPhones();
+    const seenAddrs = this.loadSeenAddresses();
+    const negativeKeywords = this.loadNegativeKeywords();
 
     const qualified = [];
     let pageToken;
@@ -114,6 +116,8 @@ export class Scout extends BaseAgent {
     let skippedLowReviews = 0;
     let skippedClosed = 0;
     let skippedPhoneDupe = 0;
+    let skippedAddressDupe = 0;
+    let skippedNegative = 0;
 
     try {
       do {
@@ -158,6 +162,12 @@ export class Scout extends BaseAgent {
           const phoneKey = this.normalizePhone(p.nationalPhoneNumber);
           if (phoneKey && seenPhones.has(phoneKey)) { skippedPhoneDupe++; continue; }
 
+          const addrKey = this.normalizeAddress(p.formattedAddress);
+          if (addrKey && seenAddrs.has(addrKey)) { skippedAddressDupe++; continue; }
+
+          const nameLower = (p.displayName?.text || '').toLowerCase();
+          if (negativeKeywords.some((kw) => nameLower.includes(kw))) { skippedNegative++; continue; }
+
           qualified.push({
             place_id: p.id,
             name: p.displayName?.text || '',
@@ -172,6 +182,7 @@ export class Scout extends BaseAgent {
           });
           seen.add(p.id);
           if (phoneKey) seenPhones.add(phoneKey);
+          if (addrKey) seenAddrs.add(addrKey);
           if (qualified.length >= limit) break;
         }
 
@@ -182,7 +193,9 @@ export class Scout extends BaseAgent {
         `Found ${qualified.length} businesses without websites in ${zipCode} ` +
           `(${requestsMade} API calls; skipped ${skippedHasWebsite} with site, ` +
           `${skippedCategory} off-category, ${skippedDupe} dupes, ` +
-          `${skippedClosed} closed, ${skippedLowReviews} low-reviews, ${skippedPhoneDupe} phone-dupes)`,
+          `${skippedClosed} closed, ${skippedLowReviews} low-reviews, ` +
+          `${skippedPhoneDupe} phone-dupes, ${skippedAddressDupe} addr-dupes, ` +
+          `${skippedNegative} negative-keyword)`,
         qualified.length > 0 ? 'success' : 'warning',
       );
       this.completeTask();
@@ -238,6 +251,43 @@ export class Scout extends BaseAgent {
     const digits = String(phone).replace(/\D/g, '');
     // Strip a leading country code if present (US-centric today).
     return digits.length > 10 ? digits.slice(-10) : digits;
+  }
+
+  // Coarse address normalization: lowercase, drop punctuation, collapse
+  // whitespace, and keep only the first line (drop the city/state tail
+  // that Places appends). Catches "123 Main St, Beverly Hills, CA" vs
+  // "123 Main Street" collisions.
+  normalizeAddress(addr) {
+    if (!addr) return '';
+    const firstLine = String(addr).split(',')[0] || '';
+    return firstLine
+      .toLowerCase()
+      .replace(/\bstreet\b/g, 'st')
+      .replace(/\bavenue\b/g, 'ave')
+      .replace(/\bboulevard\b/g, 'blvd')
+      .replace(/\broad\b/g, 'rd')
+      .replace(/\bdrive\b/g, 'dr')
+      .replace(/[^\w\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  loadSeenAddresses() {
+    try {
+      const rows = getDb().prepare('SELECT address FROM businesses WHERE address IS NOT NULL').all();
+      return new Set(rows.map((r) => this.normalizeAddress(r.address)).filter(Boolean));
+    } catch {
+      return new Set();
+    }
+  }
+
+  // Comma-separated list from settings. "vape,smoke,cannabis" etc.
+  loadNegativeKeywords() {
+    const raw = getSetting('scout_negative_keywords') || '';
+    return raw
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
   }
 
   inferCategory(types = []) {
