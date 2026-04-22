@@ -1,5 +1,6 @@
 import { BaseAgent } from './BaseAgent.js';
 import { getSetting } from '../database.js';
+import Anthropic from '@anthropic-ai/sdk';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -79,9 +80,22 @@ export class Builder extends BaseAgent {
     const category = business.category || 'default';
     const design = DESIGN_STYLES[category] || DESIGN_STYLES.default;
 
-    // Generate about text (mock LLM — replace with real API call)
-    const about = this.generateAbout(business);
-    const tagline = this.generateTagline(business);
+    // Use real Claude when key is set; fall back to templates otherwise.
+    const anthropicKey = getSetting('anthropic_api_key');
+    let about;
+    let tagline;
+    if (anthropicKey) {
+      try {
+        ({ about, tagline } = await this.generateCopyWithClaude(business, anthropicKey));
+      } catch (err) {
+        this.log(`Claude copy failed (${err.message}) — falling back to templates`, 'warning');
+        about = this.generateAbout(business);
+        tagline = this.generateTagline(business);
+      }
+    } else {
+      about = this.generateAbout(business);
+      tagline = this.generateTagline(business);
+    }
 
     const html = this.generateHtml(business, design, about, tagline);
 
@@ -108,8 +122,50 @@ export class Builder extends BaseAgent {
     };
   }
 
+  // Real Claude copy generation. Haiku for minimum token cost (~$0.001 per site).
+  // Returns { about, tagline } — structured JSON so we never have to parse prose.
+  async generateCopyWithClaude(biz, apiKey) {
+    const client = new Anthropic({ apiKey });
+    const reviews = Array.isArray(biz.reviews)
+      ? biz.reviews
+          .slice(0, 3)
+          .map((r) => `- (${r.rating}★) ${String(r.text || '').slice(0, 220)}`)
+          .join('\n')
+      : '';
+    const userInput = [
+      `Name: ${biz.name}`,
+      `Category: ${biz.category || 'local business'}`,
+      `Address: ${biz.address || ''}`,
+      biz.rating ? `Rating: ${biz.rating} (${biz.review_count || 0} reviews)` : '',
+      biz.editorial_summary ? `Editorial: ${biz.editorial_summary}` : '',
+      reviews ? `Top reviews:\n${reviews}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const response = await client.messages.create({
+      model: 'claude-haiku-4-5',
+      max_tokens: 400,
+      system:
+        'You write short, grounded website copy for small local businesses. ' +
+        'No jargon, no marketing clichés ("dedicated to", "nestled", "where quality meets"). ' +
+        'Base every line on the business data provided; never invent credentials or services. ' +
+        'Return ONLY valid JSON matching: {"tagline": "5-9 word phrase", "about": "50-90 word paragraph (2-3 sentences)"}',
+      messages: [{ role: 'user', content: userInput }],
+    });
+
+    const textBlock = response.content.find((b) => b.type === 'text');
+    const raw = textBlock?.text?.trim() || '';
+    // Strip accidental markdown fences if the model adds them.
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+    const parsed = JSON.parse(cleaned);
+    if (!parsed.about || !parsed.tagline) {
+      throw new Error('Claude returned incomplete copy JSON');
+    }
+    return { about: parsed.about, tagline: parsed.tagline };
+  }
+
   generateAbout(biz) {
-    // TODO: Replace with real LLM API call
     const templates = [
       `Welcome to ${biz.name}! We've been proudly serving our community with dedication and passion. Our team is committed to providing you with the highest quality ${biz.category === 'restaurant' ? 'dining experience' : 'service'} every single time you visit us.`,
       `At ${biz.name}, we believe in putting our customers first. With a stellar ${biz.rating}-star rating from ${biz.review_count} happy customers, we're proud to be a trusted name in our neighborhood. Come see why our community loves us!`,
