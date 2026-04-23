@@ -17,6 +17,7 @@ import { Postman } from './agents/Postman.js';
 import { Accountant } from './agents/Accountant.js';
 import { Pricer } from './agents/Pricer.js';
 import { SentinelClient } from './agents/Sentinel.js';
+import { PolymarketAnalyzer } from './agents/PolymarketAnalyzer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -61,6 +62,7 @@ function initAgents() {
   agents.accountant = new Accountant(broadcast);
   agents.pricer = new Pricer(broadcast);
   agents.sentinel = new SentinelClient(broadcast);
+  agents.polymarket = new PolymarketAnalyzer(broadcast);
 }
 
 initAgents();
@@ -219,6 +221,27 @@ app.post('/api/stop', async (req, res) => {
   currentPipelineId = null;
 
   res.json({ success: true });
+});
+
+// Polymarket analyzer — on-demand edge analysis for a single market.
+// Body: { marketQuestion, yesPrice, noPrice?, marketSlug? }
+// Returns: { trade, reasoning, confidence, trueProbability, edge, sources, ... }
+app.post('/api/polymarket/analyze', async (req, res) => {
+  const { marketQuestion, yesPrice, noPrice, marketSlug } = req.body || {};
+  if (!marketSlug && (!marketQuestion || yesPrice == null)) {
+    return res.status(400).json({ error: 'Provide marketSlug, or both marketQuestion and yesPrice.' });
+  }
+  if (isOverBudget()) {
+    return res.status(429).json({ error: 'Daily budget cap reached.' });
+  }
+  try {
+    if (agents.polymarket.status !== 'online') await agents.polymarket.start();
+    const verdict = await agents.polymarket.analyzeMarket({ marketQuestion, yesPrice, noPrice, marketSlug });
+    res.json(verdict);
+  } catch (err) {
+    console.error('[polymarket/analyze] failed:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Pipeline status

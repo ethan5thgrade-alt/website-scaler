@@ -198,6 +198,7 @@ function initSchema() {
     current_price: '50',
     avg_cost_per_business: '0',
     price_sample_size: '0',
+    polymarket_analysis_model: 'claude-sonnet-4-6',
   };
   for (const [key, value] of Object.entries(defaults)) {
     insertSetting.run(key, value);
@@ -210,7 +211,8 @@ function initSchema() {
   const agents = [
     'Commander', 'Scout', 'Scraper',
     'Builder-Alpha', 'Builder-Beta', 'Builder-Gamma',
-    'Postman', 'Accountant', 'Pricer', 'Sentinel'
+    'Postman', 'Accountant', 'Pricer', 'Sentinel',
+    'PolymarketAnalyzer'
   ];
   for (const name of agents) {
     insertAgent.run(name, 'offline');
