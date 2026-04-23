@@ -126,6 +126,19 @@ export const DESIGN_STYLES = {
     style: 'soft-editorial',
   },
 
+  // Property management / real estate — AppFolio-funnel automation target.
+  // Trust-building navy + a touch of green; serif display for credibility.
+  property_management: {
+    primary: '#0B2545', accent: '#13856B', bg: '#F7F9FC', text: '#0B2545',
+    font: "'Source Serif Pro', 'Inter', sans-serif", heroGradient: 'linear-gradient(135deg, #0B2545 0%, #13856B 100%)',
+    style: 'trust-navy',
+  },
+  real_estate_agency: {
+    primary: '#0B2545', accent: '#13856B', bg: '#F7F9FC', text: '#0B2545',
+    font: "'Source Serif Pro', 'Inter', sans-serif", heroGradient: 'linear-gradient(135deg, #0B2545 0%, #13856B 100%)',
+    style: 'trust-navy',
+  },
+
   // Pet care
   pet_service: {
     primary: '#4A90D9', accent: '#FFB347', bg: '#F8FBFF', text: '#2C3E50',

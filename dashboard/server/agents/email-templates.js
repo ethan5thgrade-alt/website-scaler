@@ -240,11 +240,68 @@ export const EMAIL_TEMPLATES = [
       `Hi ${firstName(b)},\n\nNo pitch, no deck. I already built ${b.name} a website — it's live at:\n${url}\n\n` +
       `$${price} one-time if you want it. Reply and we're done.\n\n${signature}`,
   },
+
+  // 23 — property management: tenant inquiries
+  // Mentions AppFolio as a known upgrade path once the PM outgrows a static
+  // landing page. We're not affiliated — just naming the category leader the
+  // reader will already recognize.
+  {
+    id: 'pm-tenant-inquiries',
+    categories: ['property_management', 'real_estate_agency'],
+    subject: (b) => `A website that takes rental inquiries for ${b.name}`,
+    body: (b, url, price = 50) =>
+      `Hi ${firstName(b)},\n\n` +
+      `Prospective tenants tend to Google a property manager before they call. ` +
+      `Right now ${b.name} has a Google listing but no site to send them to — so I built one:\n${url}\n\n` +
+      `It has a rental-inquiry form and a maintenance-request form that email you directly. ` +
+      `When you're ready to handle online rent + accounting, AppFolio picks up where this leaves off.\n\n` +
+      `Yours for $${price} one-time if you want it.\n\n${signature}`,
+  },
+
+  // 24 — property management: trust signal
+  {
+    id: 'pm-trust-signal',
+    categories: ['property_management', 'real_estate_agency'],
+    subject: (b) =>
+      hasRating(b)
+        ? `${b.name}: ${b.rating} stars, no website — here's one`
+        : `A simple website for ${b.name}`,
+    body: (b, url, price = 50) =>
+      `Hi ${firstName(b)},\n\n` +
+      (hasRating(b) && hasReviews(b)
+        ? `${b.rating} stars from ${b.review_count} reviewers is the kind of reputation owners want managing their properties — but without a website, a lot of that trust never reaches them.\n\n`
+        : `Owners shopping for a property manager almost always check for a website before they reach out.\n\n`) +
+      `I built ${b.name} a simple, mobile-friendly site. Preview here:\n${url}\n\n` +
+      `It includes an inquiry form for owners, a rental-application form for tenants, and a services section you can edit. ` +
+      `When you outgrow the one-pager, AppFolio is the usual next step for rent + maintenance at scale.\n\n` +
+      `$${price} one-time if you want to keep it.\n\n${signature}`,
+  },
+
+  // 25 — property management: short & practical
+  {
+    id: 'pm-practical',
+    categories: ['property_management', 'real_estate_agency'],
+    subject: (b) => `Rental inquiry form + site for ${b.name}`,
+    body: (b, url, price = 50) =>
+      `Hi ${firstName(b)},\n\n` +
+      `Short one — I built ${b.name} a website with a working rental-inquiry form:\n${url}\n\n` +
+      `Owners and tenants land on a real page instead of a dead Google listing. ` +
+      `If you already use (or are evaluating) AppFolio, this is a clean front door that points customers at it.\n\n` +
+      `$${price} flat if you want it. Reply and it's yours.\n\n${signature}`,
+  },
 ];
 
-// Pick a template. Allow a `bias` string (e.g., the business category) so we
-// can slightly favor templates that work better for certain categories in the
-// future — for now it's a straight random pick.
-export function pickTemplate(_bias) {
-  return EMAIL_TEMPLATES[Math.floor(Math.random() * EMAIL_TEMPLATES.length)];
+// Pick a template. If `bias` (the business category) matches a template's
+// `categories` list, we pick from that scoped set — otherwise we pick from
+// the generic pool (templates with no `categories` field). This lets a
+// category like `property_management` get its tailored copy while untagged
+// categories keep the general random rotation.
+export function pickTemplate(bias) {
+  const scoped = bias
+    ? EMAIL_TEMPLATES.filter((t) => Array.isArray(t.categories) && t.categories.includes(bias))
+    : [];
+  const pool = scoped.length > 0
+    ? scoped
+    : EMAIL_TEMPLATES.filter((t) => !Array.isArray(t.categories));
+  return pool[Math.floor(Math.random() * pool.length)];
 }

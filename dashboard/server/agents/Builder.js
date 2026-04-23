@@ -193,6 +193,8 @@ export class Builder extends BaseAgent {
       florist: 'Blooming Beautiful Since Day One',
       auto_repair: 'Keeping You on the Road',
       pet_service: 'Because They Deserve the Best',
+      property_management: 'Reliable Management for Owners and Tenants',
+      real_estate_agency: 'Reliable Management for Owners and Tenants',
     };
     return taglines[biz.category] || 'Excellence in Everything We Do';
   }

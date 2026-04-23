@@ -16,6 +16,8 @@ const MOCK_BUSINESSES = [
   { place_id: 'mock_10', name: 'Sunrise Yoga Studio', category: 'gym', rating: 4.8, review_count: 187, address: '741 Sunset Blvd', phone: '(310) 555-0110', latitude: 34.0545, longitude: -118.2470 },
   { place_id: 'mock_11', name: "Luigi's Pizza Palace", category: 'restaurant', rating: 4.6, review_count: 312, address: '852 Broadway', phone: '(310) 555-0111', latitude: 34.0518, longitude: -118.2435 },
   { place_id: 'mock_12', name: 'Happy Paws Pet Grooming', category: 'pet_service', rating: 4.5, review_count: 121, address: '963 Highland Ave', phone: '(310) 555-0112', latitude: 34.0528, longitude: -118.2442 },
+  { place_id: 'mock_13', name: 'Coastline Property Management', category: 'property_management', rating: 4.4, review_count: 48, address: '210 Harbor Way', phone: '(310) 555-0113', latitude: 34.0522, longitude: -118.2439 },
+  { place_id: 'mock_14', name: 'Keystone Rentals LLC', category: 'property_management', rating: 4.2, review_count: 29, address: '44 Keystone Ave', phone: '(310) 555-0114', latitude: 34.0533, longitude: -118.2448 },
 ];
 
 export class Scout extends BaseAgent {
@@ -53,7 +55,12 @@ export class Scout extends BaseAgent {
     // Places API (New) v1 Text Search. Field mask keeps cost minimal — we only
     // pay for fields we request. `websiteUri` is how we filter: if the listing
     // has a website, we skip it (that's our qualifier — they don't need us).
-    const query = `${category === 'all' ? 'businesses' : category} in ${zipCode}`;
+    const searchPhrase =
+      category === 'all' ? 'businesses'
+      : category === 'property_management' ? 'property management companies'
+      : category === 'real_estate_agency' ? 'real estate agencies'
+      : category;
+    const query = `${searchPhrase} in ${zipCode}`;
     const fieldMask = [
       'places.id',
       'places.displayName',
@@ -150,6 +157,7 @@ export class Scout extends BaseAgent {
       florist: 'florist',
       car_repair: 'auto_repair',
       pet_store: 'pet_service',
+      real_estate_agency: 'property_management',
     };
     for (const t of types) if (map[t]) return map[t];
     return types[0] || 'other';

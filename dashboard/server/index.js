@@ -17,6 +17,7 @@ import { Postman } from './agents/Postman.js';
 import { Accountant } from './agents/Accountant.js';
 import { Pricer } from './agents/Pricer.js';
 import { SentinelClient } from './agents/Sentinel.js';
+import { buildAppFolioRunConfig } from './automations/appfolio.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -152,6 +153,53 @@ app.post('/api/test-run', async (req, res) => {
     });
 
   res.json({ success: true, pipelineId: currentPipelineId });
+});
+
+// AppFolio funnel automation — preset pipeline run targeting small property
+// management companies without websites. Same underlying pipeline as /api/deploy;
+// body overrides (zipCodes, maxLeads, dailyEmailLimit) are optional.
+app.post('/api/automations/appfolio/run', async (req, res) => {
+  if (pipelineRunning) return res.status(400).json({ error: 'Pipeline already running' });
+
+  const config = buildAppFolioRunConfig(req.body || {});
+  const db = getDb();
+
+  const run = db.prepare(
+    'INSERT INTO pipeline_runs (zip_codes, categories, max_leads, daily_email_limit, status, started_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+  ).run(
+    JSON.stringify(config.zipCodes),
+    JSON.stringify(config.categories),
+    config.maxLeads,
+    config.dailyEmailLimit,
+    'running',
+  );
+  currentPipelineId = run.lastInsertRowid;
+  pipelineRunning = true;
+
+  broadcast('pipeline_status', {
+    status: 'running',
+    pipelineId: currentPipelineId,
+    kind: 'automation',
+    automation: 'appfolio',
+  });
+
+  await agents.sentinel.start();
+  for (const [name, agent] of Object.entries(agents)) {
+    if (name !== 'sentinel') await agent.start();
+  }
+
+  agents.commander.log(
+    `AppFolio automation started — ${config.zipCodes.length} ZIPs, max ${config.maxLeads} leads`,
+    'success',
+  );
+
+  runPipeline(config.zipCodes, config.categories, config.maxLeads, config.dailyEmailLimit)
+    .catch((err) => {
+      console.error('[appfolio] pipeline failed:', err.message);
+      broadcast('pipeline_error', { error: err.message, automation: 'appfolio' });
+    });
+
+  res.json({ success: true, pipelineId: currentPipelineId, config });
 });
 
 // SendGrid inbound event webhook. Configure in SendGrid → Mail Settings →
