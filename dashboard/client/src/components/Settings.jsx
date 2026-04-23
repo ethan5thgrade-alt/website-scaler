@@ -60,6 +60,13 @@ const LIMITS_FIELDS = [
     type: 'number',
     help: 'Throttle so it doesn\'t look like a burst.',
   },
+  {
+    key: 'min_rating',
+    label: 'Min Google rating',
+    type: 'number',
+    step: '0.1',
+    help: 'Scout only returns businesses at or above this rating. Default 4.0 — unrated listings are also skipped.',
+  },
 ];
 
 export default function Settings() {
@@ -221,15 +228,16 @@ export default function Settings() {
         );
       })}
 
-      {/* Limits */}
+      {/* Limits & Lead Quality */}
       <div className="card border border-dark-500 p-5 rounded-lg bg-dark-800/40">
-        <h2 className="text-lg font-semibold text-white mb-4">Limits</h2>
+        <h2 className="text-lg font-semibold text-white mb-4">Limits &amp; Lead Quality</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {LIMITS_FIELDS.map((field) => (
             <div key={field.key}>
               <label className="block text-xs text-gray-400 mb-1">{field.label}</label>
               <input
                 type={field.type}
+                step={field.step}
                 value={settings[field.key] ?? ''}
                 onChange={(e) => handleChange(field.key, e.target.value)}
                 className="w-full bg-dark-900 border border-dark-500 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"

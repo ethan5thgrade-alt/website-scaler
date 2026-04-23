@@ -26,17 +26,22 @@ export class Scout extends BaseAgent {
   async findBusinesses(zipCode, category, limit = 10) {
     this.heartbeat();
     const apiKey = getSetting('google_maps_api_key');
+    const minRating = parseFloat(getSetting('min_rating')) || 0;
 
     if (apiKey) {
-      return this.findBusinessesFromApi(zipCode, category, limit, apiKey);
+      return this.findBusinessesFromApi(zipCode, category, limit, apiKey, minRating);
     }
 
     // Mock mode — no Google Maps key configured
-    this.log(`Searching for ${category} in ${zipCode} [MOCK: add Google Maps API key for real data]`, 'info');
+    this.log(
+      `Searching for ${category} in ${zipCode} (rating ≥ ${minRating || 'any'}) [MOCK: add Google Maps API key for real data]`,
+      'info',
+    );
     await this.simulateDelay(800, 2000);
 
     const filtered = MOCK_BUSINESSES
       .filter((b) => !category || b.category === category || category === 'all')
+      .filter((b) => !minRating || (b.rating || 0) >= minRating)
       .slice(0, limit)
       .map((b) => ({
         ...b,
@@ -44,12 +49,15 @@ export class Scout extends BaseAgent {
         address: `${b.address}, ${zipCode}`,
       }));
 
-    this.log(`Found ${filtered.length} businesses without websites in ${zipCode}`, 'success');
+    this.log(
+      `Found ${filtered.length} businesses without websites in ${zipCode} (rated ≥ ${minRating || 0})`,
+      'success',
+    );
     this.completeTask();
     return filtered;
   }
 
-  async findBusinessesFromApi(zipCode, category, limit, apiKey) {
+  async findBusinessesFromApi(zipCode, category, limit, apiKey, minRating = 0) {
     // Places API (New) v1 Text Search. Field mask keeps cost minimal — we only
     // pay for fields we request. `websiteUri` is how we filter: if the listing
     // has a website, we skip it (that's our qualifier — they don't need us).
@@ -71,6 +79,9 @@ export class Scout extends BaseAgent {
     const qualified = [];
     let pageToken;
     let requestsMade = 0;
+    let skippedHasWebsite = 0;
+    let skippedLowRating = 0;
+    let skippedNoRating = 0;
 
     try {
       do {
@@ -102,7 +113,17 @@ export class Scout extends BaseAgent {
         logGoogleMapsUsage({ agent: this.name, sku: 'text_search' });
 
         for (const p of data.places || []) {
-          if (p.websiteUri) continue; // already has a site — skip
+          if (p.websiteUri) { skippedHasWebsite++; continue; }
+
+          // Rating gate — default 4.0. We skip unrated listings too: if Google
+          // has no stars for them, they're almost never real ongoing businesses,
+          // and they've never proven they're worth pitching.
+          if (minRating > 0) {
+            const rating = p.rating;
+            if (rating == null) { skippedNoRating++; continue; }
+            if (rating < minRating) { skippedLowRating++; continue; }
+          }
+
           qualified.push({
             place_id: p.id,
             name: p.displayName?.text || '',
@@ -122,7 +143,9 @@ export class Scout extends BaseAgent {
       } while (pageToken && qualified.length < limit && requestsMade < 3);
 
       this.log(
-        `Found ${qualified.length} businesses without websites in ${zipCode} (${requestsMade} API calls)`,
+        `Found ${qualified.length} leads (no website, rated ≥ ${minRating || 0}) in ${zipCode} — ` +
+          `${requestsMade} API calls; skipped ${skippedHasWebsite} with site, ` +
+          `${skippedLowRating} below threshold, ${skippedNoRating} unrated`,
         qualified.length > 0 ? 'success' : 'warning',
       );
       this.completeTask();
