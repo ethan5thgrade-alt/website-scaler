@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NoSiteLeads — sign in</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="nav">
+    <div class="brand"><a href="/" style="color:inherit;">NoSiteLeads</a></div>
+    <nav><a href="/">Home</a></nav>
+  </header>
+
+  <div class="container narrow" style="padding-top: 60px;">
+    <div class="card">
+      <h2 id="title" style="margin-top:0">Sign in</h2>
+      <p class="muted" id="subtitle">Welcome back.</p>
+
+      <form id="auth-form">
+        <div class="field">
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" autocomplete="email" required />
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" minlength="8" required />
+        </div>
+        <button class="btn" type="submit" id="submit-btn">Sign in</button>
+        <div class="error" id="error" style="display:none;"></div>
+      </form>
+
+      <p class="muted" style="margin-top: 16px; font-size: 13px;">
+        <span id="toggle-prompt">Don't have an account?</span>
+        <a href="#" id="toggle-link">Create one</a>
+      </p>
+    </div>
+  </div>
+
+  <script>
+    const isSignup = new URLSearchParams(location.search).get('signup') === '1';
+    let mode = isSignup ? 'register' : 'login';
+
+    const titleEl = document.getElementById('title');
+    const subtitleEl = document.getElementById('subtitle');
+    const submitBtn = document.getElementById('submit-btn');
+    const togglePrompt = document.getElementById('toggle-prompt');
+    const toggleLink = document.getElementById('toggle-link');
+    const errorEl = document.getElementById('error');
+    const passwordEl = document.getElementById('password');
+
+    function render() {
+      if (mode === 'register') {
+        titleEl.textContent = 'Create your account';
+        subtitleEl.textContent = 'Start finding leads in your area today.';
+        submitBtn.textContent = 'Create account';
+        togglePrompt.textContent = 'Already have an account?';
+        toggleLink.textContent = 'Sign in';
+        passwordEl.autocomplete = 'new-password';
+      } else {
+        titleEl.textContent = 'Sign in';
+        subtitleEl.textContent = 'Welcome back.';
+        submitBtn.textContent = 'Sign in';
+        togglePrompt.textContent = "Don't have an account?";
+        toggleLink.textContent = 'Create one';
+        passwordEl.autocomplete = 'current-password';
+      }
+    }
+    render();
+
+    toggleLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      mode = mode === 'login' ? 'register' : 'login';
+      errorEl.style.display = 'none';
+      render();
+    });
+
+    document.getElementById('auth-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.style.display = 'none';
+      submitBtn.disabled = true;
+      const email = document.getElementById('email').value.trim();
+      const password = passwordEl.value;
+      try {
+        const resp = await fetch('/api/auth/' + mode, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'Something went wrong');
+        location.href = '/app';
+      } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.style.display = 'block';
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

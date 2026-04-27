@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NoSiteLeads — dashboard</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="nav">
+    <div class="brand"><a href="/" style="color:inherit;">NoSiteLeads</a></div>
+    <nav>
+      <span class="muted" id="user-email" style="margin-right: 16px;"></span>
+      <a href="#" id="manage-billing">Billing</a>
+      <a href="#" id="logout">Sign out</a>
+    </nav>
+  </header>
+
+  <div class="container">
+    <div id="paywall" class="card" style="display:none; margin-bottom: 24px;">
+      <h3 style="margin-top:0;">Subscribe to start searching</h3>
+      <p class="muted">$49/month. Unlimited searches, CSV export, and AI pitch emails. Cancel anytime.</p>
+      <button class="btn" id="subscribe-btn">Subscribe</button>
+      <div class="error" id="subscribe-error" style="display:none;"></div>
+    </div>
+
+    <div class="app-grid">
+      <div class="card search-form">
+        <h3 style="margin-top:0;">Find leads</h3>
+        <form id="search-form">
+          <div class="field">
+            <label for="zip">ZIP code</label>
+            <input id="zip" name="zip" inputmode="numeric" pattern="\d{5}" maxlength="10" placeholder="92688" required />
+          </div>
+          <div class="field">
+            <label for="businessType">Business type</label>
+            <select id="businessType" name="businessType" required></select>
+          </div>
+          <button class="btn" type="submit" id="search-btn">Find leads</button>
+          <div class="error" id="search-error" style="display:none;"></div>
+        </form>
+
+        <hr style="border:none; border-top: 1px solid var(--border); margin: 20px 0;">
+        <h4 style="margin: 0 0 8px;">Recent searches</h4>
+        <div id="history" class="muted" style="font-size: 13px;">None yet.</div>
+      </div>
+
+      <div>
+        <div class="toolbar">
+          <div class="grow">
+            <strong id="results-title">Your leads will appear here.</strong>
+            <div class="muted" id="results-meta" style="font-size: 13px;"></div>
+          </div>
+          <a class="btn small secondary" id="csv-link" style="display:none;">Download CSV</a>
+        </div>
+        <div id="results"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="pitch-modal">
+    <div class="modal">
+      <h3 id="pitch-title">Pitch email</h3>
+      <p class="muted" id="pitch-for"></p>
+      <div class="field">
+        <label>Subject</label>
+        <input id="pitch-subject" />
+      </div>
+      <div class="field">
+        <label>Body</label>
+        <textarea id="pitch-body"></textarea>
+      </div>
+      <div class="actions">
+        <button class="btn ghost" id="pitch-close">Close</button>
+        <button class="btn secondary" id="pitch-copy">Copy</button>
+        <button class="btn" id="pitch-mailto">Open in email</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
