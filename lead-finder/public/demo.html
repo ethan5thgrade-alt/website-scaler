@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>NoSiteLeads — demo</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --surface: #121821;
+      --surface-2: #1a2230;
+      --border: #243042;
+      --text: #e7eef7;
+      --muted: #94a3b8;
+      --accent: #4ade80;
+      --accent-hover: #22c55e;
+      --danger: #f87171;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.5; padding-bottom: env(safe-area-inset-bottom);
+    }
+    a { color: var(--accent); text-decoration: none; }
+
+    .screen { display: none; }
+    .screen.active { display: block; }
+
+    .nav {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 18px; border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; background: var(--bg); z-index: 5;
+    }
+    .brand { font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
+    .nav .right { display: flex; gap: 14px; align-items: center; font-size: 13px; }
+    .nav .right a, .nav .right span { color: var(--muted); }
+
+    .container { padding: 18px; max-width: 720px; margin: 0 auto; }
+
+    .hero { padding: 36px 18px 8px; text-align: center; }
+    .hero h1 {
+      font-size: 38px; line-height: 1.05; margin: 0 0 14px;
+      letter-spacing: -0.025em; font-weight: 800;
+    }
+    .hero h1 span { color: var(--accent); }
+    .hero p { font-size: 16px; color: var(--muted); margin: 0 auto 22px; max-width: 480px; }
+
+    .btn {
+      display: inline-block; padding: 12px 22px; background: var(--accent);
+      color: #052e16; border: none; border-radius: 10px; font-weight: 600;
+      font-size: 15px; cursor: pointer; text-decoration: none;
+      font-family: inherit;
+    }
+    .btn:active { background: var(--accent-hover); }
+    .btn.full { width: 100%; }
+    .btn.small { padding: 8px 14px; font-size: 13px; }
+    .btn.secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
+    .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+
+    .features { display: grid; grid-template-columns: 1fr; gap: 12px; margin: 28px 0 16px; }
+    .feature { background: var(--surface); border: 1px solid var(--border); padding: 18px; border-radius: 12px; }
+    .feature h3 { margin: 0 0 6px; font-size: 16px; }
+    .feature p { margin: 0; color: var(--muted); font-size: 14px; }
+
+    .pricing { text-align: center; padding: 12px 0 36px; }
+    .price-card {
+      display: inline-block; background: var(--surface); border: 1px solid var(--border);
+      padding: 24px 28px; border-radius: 14px; text-align: left; min-width: 280px;
+    }
+    .price-card h3 { margin: 0 0 4px; font-size: 14px; color: var(--muted); }
+    .price-card .price { font-size: 40px; font-weight: 800; letter-spacing: -0.02em; }
+    .price-card .price small { font-size: 14px; color: var(--muted); font-weight: 500; }
+    .price-card ul { padding-left: 18px; color: var(--muted); margin: 12px 0 16px; }
+    .price-card ul li { margin-bottom: 4px; font-size: 14px; }
+
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    input, select, textarea {
+      width: 100%; padding: 12px 12px; background: var(--surface-2); color: var(--text);
+      border: 1px solid var(--border); border-radius: 10px; font-size: 16px;
+      font-family: inherit; -webkit-appearance: none; appearance: none;
+    }
+    select { background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 18px) 18px, calc(100% - 13px) 18px; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 36px; }
+    .field { margin-bottom: 12px; }
+
+    .lead { border: 1px solid var(--border); border-radius: 12px; padding: 14px;
+      margin-bottom: 10px; background: var(--surface); }
+    .lead h4 { margin: 0 0 6px; font-size: 16px; }
+    .lead .meta { color: var(--muted); font-size: 13px; }
+    .lead .contact { font-size: 14px; margin: 8px 0; display: flex; gap: 10px; flex-wrap: wrap; }
+    .lead .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .tag { display: inline-block; padding: 2px 8px; border-radius: 999px;
+      background: var(--surface-2); color: var(--muted); font-size: 11px; margin-right: 4px; }
+    .tag.no-site { background: #052e16; color: var(--accent); }
+    .tag.social { background: #1e293b; color: #93c5fd; }
+
+    .toolbar { display: flex; gap: 10px; align-items: flex-end; justify-content: space-between; margin-bottom: 14px; }
+    .toolbar .grow { flex: 1; }
+
+    .modal-bg {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+      display: none; align-items: flex-end; justify-content: center; z-index: 50;
+    }
+    .modal-bg.open { display: flex; }
+    .modal {
+      background: var(--surface); border-top: 1px solid var(--border);
+      border-radius: 16px 16px 0 0; padding: 18px; width: 100%;
+      max-width: 720px; max-height: 92vh; overflow: auto;
+      padding-bottom: calc(18px + env(safe-area-inset-bottom));
+    }
+    .modal h3 { margin-top: 0; }
+    .modal textarea { min-height: 220px; font-size: 14px; line-height: 1.45; }
+    .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; flex-wrap: wrap; }
+
+    .demo-banner {
+      background: #1e293b; color: #93c5fd;
+      padding: 8px 14px; text-align: center; font-size: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    @media (min-width: 720px) {
+      .features { grid-template-columns: repeat(3, 1fr); }
+      .hero h1 { font-size: 52px; }
+      .modal-bg { align-items: center; }
+      .modal { border-radius: 16px; border: 1px solid var(--border); width: 92%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="demo-banner">DEMO — using mock data, no signup or API keys needed</div>
+
+  <!-- LANDING -->
+  <section class="screen active" id="screen-landing">
+    <div class="nav">
+      <div class="brand">NoSiteLeads</div>
+      <div class="right"><a href="#" data-go="app">Open demo →</a></div>
+    </div>
+
+    <div class="hero">
+      <h1>Find local businesses<br/>with <span>no website</span>.</h1>
+      <p>Drop in a ZIP code, pick a category, and get a clean list of nearby
+        businesses that don't have a real website yet — phones, ratings, and
+        a one-click pitch email.</p>
+      <a class="btn" href="#" data-go="app">Try the demo →</a>
+    </div>
+
+    <div class="container">
+      <div class="features">
+        <div class="feature"><h3>Real, contactable leads</h3><p>Filters out chains, ghost listings, and businesses whose only "site" is Facebook or Linktree.</p></div>
+        <div class="feature"><h3>Phone, email, reviews</h3><p>Phone, rating, review count, address, and a best-effort email when we can find one.</p></div>
+        <div class="feature"><h3>Instant pitch emails</h3><p>Generate a warm cold email for any lead with one tap. Edit, copy, send.</p></div>
+      </div>
+
+      <div class="pricing">
+        <h2 style="margin: 8px 0 6px;">Simple pricing</h2>
+        <p style="color: var(--muted); margin: 0 0 18px;">One plan. Cancel anytime.</p>
+        <div class="price-card">
+          <h3>Pro</h3>
+          <div class="price">$49 <small>/ month</small></div>
+          <ul>
+            <li>Unlimited ZIP-code searches</li>
+            <li>Up to 60 leads per search</li>
+            <li>CSV export</li>
+            <li>AI pitch-email generator</li>
+            <li>Cancel anytime</li>
+          </ul>
+          <a class="btn full" href="#" data-go="app">Try the demo</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- APP -->
+  <section class="screen" id="screen-app">
+    <div class="nav">
+      <div class="brand"><a href="#" data-go="landing" style="color:inherit;">NoSiteLeads</a></div>
+      <div class="right"><span>demo@example.com</span><a href="#" data-go="landing">Exit</a></div>
+    </div>
+
+    <div class="container">
+      <div class="card" style="margin-bottom: 14px;">
+        <h3 style="margin-top:0;">Find leads</h3>
+        <form id="search-form">
+          <div class="field">
+            <label for="zip">ZIP code</label>
+            <input id="zip" inputmode="numeric" pattern="\d{5}" maxlength="10" value="92688" required />
+          </div>
+          <div class="field">
+            <label for="businessType">Business type</label>
+            <select id="businessType" required></select>
+          </div>
+          <button class="btn full" type="submit" id="search-btn">Find leads</button>
+        </form>
+      </div>
+
+      <div class="toolbar">
+        <div class="grow">
+          <strong id="results-title">Tap "Find leads" to see results.</strong>
+          <div style="color: var(--muted); font-size: 13px;" id="results-meta"></div>
+        </div>
+      </div>
+      <div id="results"></div>
+    </div>
+  </section>
+
+  <!-- PITCH MODAL -->
+  <div class="modal-bg" id="pitch-modal">
+    <div class="modal">
+      <h3 id="pitch-title">Pitch email</h3>
+      <p style="color: var(--muted); margin: 0 0 12px;" id="pitch-for"></p>
+      <div class="field">
+        <label>Subject</label>
+        <input id="pitch-subject" />
+      </div>
+      <div class="field">
+        <label>Body</label>
+        <textarea id="pitch-body"></textarea>
+      </div>
+      <div class="actions">
+        <button class="btn ghost" id="pitch-close">Close</button>
+        <button class="btn secondary" id="pitch-copy">Copy</button>
+        <button class="btn" id="pitch-mailto">Open in email</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    const BUSINESS_TYPES = [
+      'plumbers', 'electricians', 'landscapers', 'hair salons', 'barber shops',
+      'roofers', 'handymen', 'painters', 'mobile mechanics', 'auto detailers',
+      'tutors', 'pet groomers', 'house cleaners', 'movers', 'tree services',
+      'pool services', 'hvac', 'locksmiths', 'caterers', 'photographers',
+    ];
+
+    const MOCK_LEADS = {
+      'plumbers': [
+        { id: 1, name: "Mike's Drain & Plumbing", address: '123 Avenida del Sol, Rancho Santa Margarita, CA 92688', phone: '(949) 555-0142', email: 'mike@facebook.com', rating: 4.8, review_count: 47, category: 'plumber', social_link: 'https://facebook.com/mikesdrain' },
+        { id: 2, name: 'Hernandez Family Plumbing', address: '88 Lake Forest Dr, Rancho Santa Margarita, CA 92688', phone: '(949) 555-0118', email: '', rating: 4.6, review_count: 22, category: 'plumber', social_link: '' },
+        { id: 3, name: '24/7 Pipe Pros', address: '450 Antonio Pkwy, RSM, CA 92688', phone: '(714) 555-0987', email: 'info@instagram.com', rating: 4.4, review_count: 9, category: 'plumber', social_link: 'https://instagram.com/247pipepros' },
+      ],
+      'landscapers': [
+        { id: 4, name: 'Verde Landscape Co.', address: '301 Antonio Pkwy, Mission Viejo, CA 92688', phone: '(949) 555-0211', email: '', rating: 4.9, review_count: 31, category: 'landscaping', social_link: '' },
+        { id: 5, name: 'Garcia Brothers Lawn Care', address: '12 Crown Valley, Mission Viejo, CA 92688', phone: '(949) 555-0166', email: 'garcia@facebook.com', rating: 4.7, review_count: 18, category: 'landscaping', social_link: 'https://facebook.com/garciabros' },
+      ],
+      'hair salons': [
+        { id: 6, name: 'Lola & Co. Hair Studio', address: '500 Empresa Dr, RSM, CA 92688', phone: '(949) 555-0303', email: 'lola@instagram.com', rating: 4.9, review_count: 64, category: 'hair_salon', social_link: 'https://instagram.com/lolaandco' },
+        { id: 7, name: "Tony's Cuts", address: '77 Plaza Estival, Mission Viejo, CA 92688', phone: '(949) 555-0288', email: '', rating: 4.5, review_count: 12, category: 'barber_shop', social_link: '' },
+      ],
+      'barber shops': [
+        { id: 8, name: 'Old Town Barber', address: '14 Plaza Estival, RSM, CA 92688', phone: '(949) 555-0455', email: '', rating: 4.8, review_count: 41, category: 'barber_shop', social_link: 'https://facebook.com/oldtownbarber' },
+      ],
+      'roofers': [
+        { id: 9, name: 'Sunset Roofing', address: '900 Antonio Pkwy, RSM, CA 92688', phone: '(949) 555-0612', email: '', rating: 4.7, review_count: 28, category: 'roofing_contractor', social_link: '' },
+        { id: 10, name: 'Coastal Roof & Repair', address: '210 Plaza, Mission Viejo, CA 92688', phone: '(714) 555-0488', email: 'coastal@facebook.com', rating: 4.5, review_count: 14, category: 'roofing_contractor', social_link: 'https://facebook.com/coastalroof' },
+      ],
+    };
+
+    function fillTypes() {
+      const sel = $('businessType');
+      for (const t of BUSINESS_TYPES) {
+        const opt = document.createElement('option');
+        opt.value = t; opt.textContent = t;
+        sel.appendChild(opt);
+      }
+      sel.value = 'plumbers';
+    }
+    fillTypes();
+
+    document.querySelectorAll('[data-go]').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        const target = el.getAttribute('data-go');
+        document.querySelectorAll('.screen').forEach((s) => s.classList.remove('active'));
+        $('screen-' + target).classList.add('active');
+        window.scrollTo(0, 0);
+      });
+    });
+
+    $('search-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const zip = $('zip').value.trim();
+      const type = $('businessType').value;
+
+      $('results-title').textContent = `Searching ${type} in ${zip}...`;
+      $('results-meta').textContent = '';
+      $('results').innerHTML = '';
+      $('search-btn').disabled = true;
+      $('search-btn').textContent = 'Searching...';
+
+      setTimeout(() => {
+        const leads = (MOCK_LEADS[type] || []).map((l) => ({ ...l }));
+        $('results-title').textContent = leads.length
+          ? `${leads.length} leads — ${type} · ${zip}`
+          : `0 leads — ${type} · ${zip}`;
+        $('results-meta').textContent = leads.length
+          ? 'Filtered to operational businesses with no real website, ≥3 reviews, ≥3.0★, and a phone number.'
+          : 'No mock data for this type. Try plumbers, landscapers, hair salons, barber shops, or roofers.';
+
+        const wrap = $('results');
+        for (const l of leads) wrap.appendChild(renderLead(l));
+        $('search-btn').disabled = false;
+        $('search-btn').textContent = 'Find leads';
+      }, 700);
+    });
+
+    function renderLead(l) {
+      const div = document.createElement('div');
+      div.className = 'lead';
+      div.innerHTML = `
+        <h4>${esc(l.name)}</h4>
+        <div>
+          <span class="tag no-site">no website</span>
+          ${l.social_link ? '<span class="tag social">social-only</span>' : ''}
+          <span class="tag">${esc(l.category)}</span>
+        </div>
+        <div class="meta">${esc(l.address)}</div>
+        <div class="meta">${l.rating}★ · ${l.review_count} reviews</div>
+        <div class="contact">
+          <span>📞 <a href="tel:${esc(l.phone)}">${esc(l.phone)}</a></span>
+          ${l.email ? `<span>✉ <a href="mailto:${esc(l.email)}">${esc(l.email)}</a></span>` : '<span style="color:var(--muted)">no email found</span>'}
+        </div>
+        <div class="actions">
+          <button class="btn small" data-pitch>✨ Generate pitch email</button>
+        </div>
+      `;
+      div.querySelector('[data-pitch]').addEventListener('click', () => openPitch(l));
+      return div;
+    }
+
+    function mockPitch(lead) {
+      const name = lead.name;
+      const cat = (lead.category || 'business').replace(/_/g, ' ');
+      const subject = `Quick idea for ${name}`;
+      const body =
+`Hi ${name} team,
+
+I came across your listing — ${lead.review_count} reviews and a ${lead.rating}-star rating is a great reputation. I noticed you don't have a website yet${lead.social_link ? ' (just a social page)' : ''}, which means folks searching for ${cat} in your area are probably finding your competitors first.
+
+I build simple, fast websites for local businesses for a flat fee — phone, hours, services, reviews, contact form. Most clients are live in under a week.
+
+If you'd like, I can put together a free 60-second mockup so you can see what it would look like. Just reply "yes" and I'll send it over.
+
+Thanks,
+A local web designer`;
+      return { subject, body };
+    }
+
+    function openPitch(lead) {
+      $('pitch-for').textContent = `For ${lead.name} — generating...`;
+      $('pitch-subject').value = '';
+      $('pitch-body').value = '';
+      $('pitch-modal').classList.add('open');
+
+      setTimeout(() => {
+        const p = mockPitch(lead);
+        $('pitch-for').textContent = `For ${lead.name}`;
+        $('pitch-subject').value = p.subject;
+        $('pitch-body').value = p.body;
+
+        $('pitch-mailto').onclick = () => {
+          const to = lead.email || '';
+          const s = encodeURIComponent($('pitch-subject').value);
+          const b = encodeURIComponent($('pitch-body').value);
+          location.href = `mailto:${to}?subject=${s}&body=${b}`;
+        };
+      }, 900);
+    }
+
+    $('pitch-close').addEventListener('click', () => $('pitch-modal').classList.remove('open'));
+    $('pitch-copy').addEventListener('click', async () => {
+      const text = `Subject: ${$('pitch-subject').value}\n\n${$('pitch-body').value}`;
+      try { await navigator.clipboard.writeText(text); } catch {}
+      $('pitch-copy').textContent = 'Copied!';
+      setTimeout(() => ($('pitch-copy').textContent = 'Copy'), 1500);
+    });
+
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      })[c]);
+    }
+  </script>
+</body>
+</html>
